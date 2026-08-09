@@ -61,35 +61,42 @@ openbanto start
 
 ---
 
-## 🌸 OpenBanto 独自の差別化
+## 🍵 OpenBanto と OpenRyoko の違い
 
-[Jinn](https://github.com/hristo2612/jinn) からは「常駐デーモン + マルチエンジン + AI組織 + Webダッシュボード + Cron + Skills + MCP」の枠を継承していますが、**Slack 上で AI同僚として実用に耐える挙動**は OpenBanto のためにフルに作り直しました。
+**OpenBanto ＝ [OpenRyoko](https://github.com/rsensui2/OpenRyoko) ＋ IBM Bob。** 本質的な追加は1点、**LLM エンジンとして IBM Bob（bobshell）を第一級で使えるようにした**ことです：
 
-### Slack 振る舞い系（全て OpenBanto 独自）
+- 🤖 **IBM Bob を既定エンジンに** — `bob run` を one-shot／セッション（`--resume` で会話継続）両対応の第一級エンジンとして実装。モデルは team／API キーに紐づき、`BOB_API_KEY` で認証
 
-- 🌸 **空気読みトリアージ** — Haiku で `silent / react / reply` を判定。雑談・横の会話には介入しない保守的設計
-- 🎯 **自然言語 `/goal`** — 「最後までやって」「完成するまで止まらないで」「終わったら教えて」等の意図を Haiku が拾い、Claude Code の Stop hook を起動
-- 🖼️ **Agents View Canvas** — 全 Banto セッションを Slack の Canvas タブにライブ同期。設定 UI から channel picker でワンクリック有効化
-- 💬 **ターン毎の個別投稿** — `/goal` で多ターン回した時、Claude の各ターンの応答が個別の Slack メッセージとして到着（進捗が見える）
+そのほかは、Bob 対応に伴う**付随的な整備**です：**WhatsApp を optional plugin 化**してコア配布を MIT クリーンに（GPL の baileys を optional peer dep 化）、**番頭ペルソナ＋「ご記帳」オンボーディング**、そして `~/.ryoko`／`~/.jinn` → **`~/.openbanto`** へのリブランド（自動マイグレーション付き）。
+
+## 🌸 上流から継承している強み（OpenRyoko / Jinn 由来）
+
+以下は上流 [OpenRyoko](https://github.com/rsensui2/OpenRyoko)（および土台の [Jinn](https://github.com/hristo2612/jinn)）が作り込んだもので、**OpenBanto もそのまま継承**しています。
+
+### Slack 振る舞い系（OpenRyoko 由来）
+
+- 🌸 **空気読みトリアージ** — 軽量モデルで `silent / react / reply` を判定。雑談・横の会話には介入しない保守的設計
+- 🎯 **自然言語 `/goal`** — 「最後までやって」等の意図を検出（※ Stop hook による多ターン自律完遂は Claude Code エンジン固有の機能）
+- 🖼️ **Agents View Canvas** — 全セッションを Slack の Canvas タブにライブ同期。channel picker でワンクリック有効化
+- 💬 **ターン毎の個別投稿** — 多ターン実行時、各ターンの応答が個別の Slack メッセージとして到着（進捗が見える）
 - 👤 **発言者認識** — Slack ID から display name を解決し、operator と他者を system prompt 上で明示区別
-- 🧵 **DM-equivalent 検出** — チャンネル内でも「ボット + 自分だけの会話」を検出して triage を skip、自然な対話を実現
+- 🧵 **DM-equivalent 検出** — チャンネル内でも「ボット + 自分だけの会話」を検出して triage を skip
 - 📡 **Telegram コネクタ** — Jinn には無い 4 つ目のコネクタ
 
-### エンジン / コスト最適化系（全て OpenBanto 独自）
+### エンジン / コスト最適化系（OpenRyoko 由来・主に Claude Code エンジン向け）
 
-- 💸 **Interactive PTY エンジン** — Claude を「対話モード」で PTY 起動（`cc_entrypoint=cli`）。2026/6/15 の Claude 改定後も自動化を**通常のサブスク利用枠**で動かし、Agent SDK クレジットの消費・追加課金を回避（オプトイン。SSH 実行は `claude -p` に自動フォールバック、ターンタイムアウト等で堅牢化）
-- 📊 **コンテキストメーター** — codex / claude 両エンジンで直近ターンの入力コンテキスト量を計測・可視化。コンテキスト枯渇の予兆が一目で分かる
-- 🖥️ **ライブ xterm CLI ビュー** — ダッシュボードで Claude の PTY セッションをそのままターミナル表示（`/ws/pty`、Origin/host ガード付き）
-- ⚙️ **`ryoko config interactive` + setup/update プロンプト** — CLI でも Web UI でも interactive を切替。更新時に未設定なら対話で案内
+- 💸 **Interactive PTY エンジン** — Claude を対話モードで PTY 起動し、改定後も通常サブスク利用枠で自動化を動かす（オプトイン。SSH 実行は headless にフォールバック）
+- 📊 **コンテキストメーター** — 直近ターンの入力コンテキスト量を計測・可視化
+- 🖥️ **ライブ xterm CLI ビュー** — ダッシュボードで PTY セッションをそのままターミナル表示（`/ws/pty`、Origin/host ガード付き）
+- ⚙️ **`openbanto config interactive` + setup/update プロンプト** — CLI でも Web UI でも interactive を切替
 
-### セキュリティ / 運用系（全て OpenBanto 独自）
+### セキュリティ / 運用系（OpenRyoko 由来）
 
 - 🔒 **Loopback Host header guard + 限定 CORS** — DNS rebinding 対策。`gateway.host = 127.0.0.1` デフォルトで安全
-- 🌐 **会話型オンボーディング** — Banto 自身が新規ユーザーに名前・役割・好みを聞いて `~/.openbanto/knowledge/` に保存
+- 🌐 **会話型オンボーディング** — 新規ユーザーに聞き取って `~/.openbanto/knowledge/` に保存（OpenBanto では番頭の「ご記帳」に味付け）
 - ✨ **Onboarding ウィザード** — Web UI 初回起動時に Slack 機能（`/goal` / Canvas / triage）を視覚的に紹介
 - 💡 **Inline discovery hint** — Slack tokens 設定済みで Canvas 未有効なら設定画面で気づかせる
-- 🧠 **Persona / Memory レイヤー** — `ryoko update` で自動マイグレーションされる人格・記憶テンプレート
-- 🏠 **`~/.openbanto` ホームディレクトリ** — `~/.jinn` からの自動マイグレーション付き、日本語ファースト
+- 🧠 **Persona / Memory レイヤー** — `openbanto update` で自動マイグレーションされる人格・記憶テンプレート
 
 ### Jinn から継承している土台（変えていない強み）
 
@@ -407,15 +414,15 @@ OpenBanto は **個人マシン or 信頼境界内の VPS で 1 人 / 1 チー�
   が `127.0.0.1` の時は loopback origin 以外からの API 呼び出しを 421 で拒否する。
   これにより DNS rebinding によるローカルブラウザ経由の attack をブロック。
 
-## 🔗 Jinn からの移行
+## 🔗 OpenRyoko / Jinn からの移行
 
-既に `~/.jinn/` で Jinn を運用している場合、OpenBanto は初回起動時に自動でディレクトリを `~/.openbanto/` にリネームします。トークン・セッション履歴・スキル・組織ファイルはすべてそのまま引き継がれます。
+既に `~/.ryoko/`（OpenRyoko）や `~/.jinn/`（Jinn）で運用している場合、OpenBanto は初回起動時に自動でディレクトリを `~/.openbanto/` にリネームします。トークン・セッション履歴・スキル・組織ファイルはすべてそのまま引き継がれます。
 
-環境変数で古い設定を尊重することもできます：
+環境変数でホームを上書きできます：
 
-- `JINN_HOME` — 指定パスをホームとして使用（後方互換）
-- `JINN_INSTANCE` — インスタンス名指定（後方互換）
-- `RYOKO_HOME` / `RYOKO_INSTANCE` — 新推奨
+- `OPENBANTO_HOME` / `OPENBANTO_INSTANCE` — 新推奨
+- `RYOKO_HOME` / `RYOKO_INSTANCE` — 後方互換
+- `JINN_HOME` / `JINN_INSTANCE` — 後方互換（最も古い）
 
 ## 📄 ライセンス
 
@@ -427,8 +434,8 @@ OpenBanto は **個人マシン or 信頼境界内の VPS で 1 人 / 1 チー�
 
 - **デーモン・組織・cron・Webダッシュボード・skills・MCP** といった土台レイヤーは [Jinn](https://github.com/hristo2612/jinn) by Hristo Stoyanov のコードを継承しています。素晴らしい基盤を公開してくれた Hristo 氏に感謝します
 - Web ダッシュボードの UI コンポーネントは [ClawPort UI](https://github.com/JohnRiceML/clawport-ui) by John Rice を基礎にしています
-- `/goal` 自然言語化・Slack Canvas 同期・空気読みトリアージ等 **Slack 振る舞い系の機能**は OpenBanto 独自実装で、上流に汎用化できる部分は Jinn に PR を送る方針です
+- `/goal` 自然言語化・Slack Canvas 同期・空気読みトリアージ等 **Slack 振る舞い系の機能**は上流 [OpenRyoko](https://github.com/rsensui2/OpenRyoko) の実装です。OpenBanto はそれを **IBM Bob エンジン上でも動くように**しつつ継承しています
 
 ## 🤝 コントリビュート
 
-本リポジトリは現在、個人利用に合わせた日本語ファーストの実験的派生版です。上流 Jinn に還元できる汎用的な改善は積極的に PR を送る方針です。
+本リポジトリは現在、個人利用に合わせた日本語ファーストの実験的派生版です。上流（OpenRyoko / Jinn）に還元できる汎用的な改善は PR を検討します。
