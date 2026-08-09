@@ -1,12 +1,22 @@
-# Contributing to Jinn
+# Contributing to OpenBanto
 
 Thanks for your interest in contributing. This guide covers the basics.
+
+> OpenBanto is a fork of [OpenRyoko](https://github.com/rsensui2/OpenRyoko)
+> (itself based on [Jinn](https://github.com/hristo2612/jinn)). Contributions
+> **specific to OpenBanto** — the IBM Bob engine, the 番頭 persona, the rebrand,
+> etc. — belong here. Improvements to the **inherited platform / Slack
+> behaviours** are often best sent upstream to OpenRyoko / Jinn. See
+> `docs/upstream-port/` for how the layers relate.
 
 ## Prerequisites
 
 - Node.js 22 or later
 - pnpm 10+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm install -g @anthropic-ai/claude-code`)
+- An engine CLI to actually run it. The default is **IBM Bob**
+  (`curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash`, then set the
+  `BOB_API_KEY` environment variable). Claude Code / Codex / Gemini also work by
+  changing `engines.default`.
 
 ## Development Setup
 
@@ -15,7 +25,7 @@ Thanks for your interest in contributing. This guide covers the basics.
    ```bash
    pnpm install
    ```
-3. Initialize Jinn (one-time — builds all packages and creates `~/.jinn`):
+3. Initialize OpenBanto (one-time — builds all packages and creates `~/.openbanto`):
    ```bash
    pnpm setup
    ```
@@ -33,6 +43,9 @@ Thanks for your interest in contributing. This guide covers the basics.
 - Keep commits focused and descriptive.
 - Run `pnpm typecheck` and `pnpm build` before submitting.
 - Open a pull request against `main` with a clear description of your changes.
+- If your change touches an area listed in
+  `docs/upstream-port/BANTO-PORT-PLAN.md`, mention it so a later upstream merge
+  doesn't regress it.
 
 ## Code Style
 
@@ -43,8 +56,8 @@ Thanks for your interest in contributing. This guide covers the basics.
 
 ## Project Layout
 
-- `packages/jimmy` -- Core gateway daemon and CLI (package dir).
-- `packages/web` -- Web dashboard frontend.
+- `packages/jimmy` — core gateway daemon and CLI (published as `openbanto`).
+- `packages/web` — web dashboard frontend (`@openbanto/web`).
 
 ## Questions?
 
