@@ -96,10 +96,10 @@ describe("restartGateway", () => {
 
     const result = restartGateway();
 
-    expect(result).toEqual({ method: "systemd-user", service: "openryoko" });
+    expect(result).toEqual({ method: "systemd-user", service: "openbanto" });
     expect(mockExec).toHaveBeenCalledWith(
       "systemctl",
-      ["--user", "restart", "openryoko"],
+      ["--user", "restart", "openbanto"],
       expect.anything(),
     );
   });
@@ -111,10 +111,10 @@ describe("restartGateway", () => {
 
     const result = restartGateway();
 
-    expect(result).toEqual({ method: "systemd-system", service: "openryoko" });
+    expect(result).toEqual({ method: "systemd-system", service: "openbanto" });
     expect(mockExec).toHaveBeenCalledWith(
       "systemctl",
-      ["restart", "openryoko"],
+      ["restart", "openbanto"],
       expect.anything(),
     );
   });
@@ -126,10 +126,10 @@ describe("restartGateway", () => {
 
     const result = restartGateway();
 
-    expect(result).toEqual({ method: "systemd-system", service: "openryoko", detail: "via sudo" });
+    expect(result).toEqual({ method: "systemd-system", service: "openbanto", detail: "via sudo" });
     expect(mockExec).toHaveBeenCalledWith(
       "sudo",
-      ["-n", "systemctl", "restart", "openryoko"],
+      ["-n", "systemctl", "restart", "openbanto"],
       expect.anything(),
     );
   });
@@ -143,7 +143,7 @@ describe("restartGateway", () => {
 
     expect(result).toEqual({
       method: "systemd-system",
-      service: "openryoko",
+      service: "openbanto",
       detail: "permission denied",
     });
   });
@@ -153,12 +153,12 @@ describe("restartGateway", () => {
     systemctl({ userActive: true });
     const { restartGateway } = await import("../lifecycle.js");
 
-    const result = restartGateway("openryoko@bot");
+    const result = restartGateway("openbanto@bot");
 
-    expect(result.service).toBe("openryoko@bot");
+    expect(result.service).toBe("openbanto@bot");
     expect(mockExec).toHaveBeenCalledWith(
       "systemctl",
-      ["--user", "restart", "openryoko@bot"],
+      ["--user", "restart", "openbanto@bot"],
       expect.anything(),
     );
   });
