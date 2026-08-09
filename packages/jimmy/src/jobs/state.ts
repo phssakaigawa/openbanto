@@ -5,7 +5,7 @@ import { JOBS_DIR } from "../shared/paths.js";
 /**
  * Detached-job state files (issue #38 follow-up).
  *
- * One JSON file per job under `~/.jinn/jobs/<id>.json`. The lifecycle is:
+ * One JSON file per job under `~/.openbanto/jobs/<id>.json`. The lifecycle is:
  *
  *   running → exited → notified          (happy path)
  *                    → notify_failed     (gateway unreachable after retries)

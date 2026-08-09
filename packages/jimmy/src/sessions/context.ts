@@ -133,7 +133,7 @@ export function buildContext(opts: {
       tier: Tier.STANDARD,
       marker: "## Self-evolution",
       content: buildEvolutionContext(portalName, opts.config),
-      summary: `## Self-evolution\nUpdate knowledge files in \`~/.jinn/knowledge/\` when you learn new info about the user or their projects.`,
+      summary: `## Self-evolution\nUpdate knowledge files in \`~/.openbanto/knowledge/\` when you learn new info about the user or their projects.`,
     });
   }
 
@@ -205,7 +205,7 @@ export function buildContext(opts: {
       tier: Tier.STANDARD,
       marker: "## Scheduled cron",
       content: cronCtx,
-      summary: "## Scheduled cron jobs\nCron definitions are in `~/.jinn/cron/jobs.json`. Read directly when needed.",
+      summary: "## Scheduled cron jobs\nCron definitions are in `~/.openbanto/cron/jobs.json`. Read directly when needed.",
     });
   }
 
@@ -216,7 +216,7 @@ export function buildContext(opts: {
       tier: Tier.OPTIONAL,
       marker: "## Knowledge base",
       content: knowledgeCtx,
-      summary: "## Knowledge base\nKnowledge files are in `~/.jinn/knowledge/` and `~/.jinn/docs/`. Read them directly when needed.",
+      summary: "## Knowledge base\nKnowledge files are in `~/.openbanto/knowledge/` and `~/.openbanto/docs/`. Read them directly when needed.",
     });
   }
 
@@ -306,7 +306,7 @@ ${languageInstruction}
 - **Model**: ${employee.model}
 ${chainOfCommand}
 ## System context
-You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`~/.jinn\` (${JINN_HOME}).
+You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`~/.openbanto\` (${JINN_HOME}).
 
 You can:
 - Read and write files in the home directory
@@ -413,9 +413,11 @@ function buildIdentity(
 
   return `# You are ${portalName}
 
-${portalName} is a personal AI assistant and gateway daemon. You are proactive, helpful, and opinionated — not a passive tool. You anticipate needs, suggest improvements, and take initiative when appropriate.${operatorLine}
+${portalName} — whose name means *banto* (番頭), the head clerk of a traditional Japanese inn (旅館) — is the front-of-house steward of this team's Slack workspace. You greet people warmly, read the room, take requests at the counter, and see them through. For heavy or multi-step work you delegate to your back-of-house engine and come back with the finished result. You are proactive, capable, and quietly hospitable — a trusted colleague, not a passive tool.${operatorLine}
 
 ## Core principles
+- **Play the part — a light ryokan touch**: Open with a brief, warm welcome the way an inn's 番頭 would (a small "おもてなし"), but never overdo it. Once the request is clear, get practical and concise.
+- **Delegate the heavy lifting**: You run the front desk. Hand deep research, multi-step jobs, and real execution to your engine, then bring back and report the result — don't try to do everything inline yourself.
 - **Be proactive**: Don't just answer questions — suggest next steps, flag issues, offer to do related tasks.
 - **Be concise**: Respect the user's time. Lead with the answer, not the reasoning.
 - **Be capable**: You have access to the filesystem, can run commands, call APIs, send messages via connectors, and manage the system.
@@ -423,7 +425,7 @@ ${portalName} is a personal AI assistant and gateway daemon. You are proactive, 
 - **Remember context**: You're part of a persistent system. Sessions can be resumed. Build on previous work.
 ${languageInstruction}
 ## Your home directory
-Your working directory is \`~/.jinn\` (${JINN_HOME}). This contains:
+Your working directory is \`~/.openbanto\` (${JINN_HOME}). This contains:
 - \`config.yaml\` — your configuration (engines, connectors, logging)
 - \`org/\` — employee definitions (YAML files defining AI workers)
 - \`skills/\` — reusable skill prompts
@@ -608,7 +610,7 @@ function buildCronContext(): string | null {
       lines.push(`- **${job.name}**: \`${job.schedule}\`${job.employee ? ` → ${job.employee}` : ""}`);
     }
     if (disabledCount > 0) {
-      lines.push(`\n_${disabledCount} disabled jobs not shown. See \`~/.jinn/cron/jobs.json\` for the full list._`);
+      lines.push(`\n_${disabledCount} disabled jobs not shown. See \`~/.openbanto/cron/jobs.json\` for the full list._`);
     }
     return lines.join("\n");
   } catch {
@@ -653,7 +655,7 @@ function buildKnowledgeContext(): string | null {
 
   const lines: string[] = [
     `## Knowledge base`,
-    `Knowledge files are in \`~/.jinn/knowledge/\` and \`~/.jinn/docs/\`. Read them directly when needed.`,
+    `Knowledge files are in \`~/.openbanto/knowledge/\` and \`~/.openbanto/docs/\`. Read them directly when needed.`,
     ``,
   ];
 
@@ -764,7 +766,7 @@ function buildConnectorContext(connectors: string[], gatewayUrl: string, portalN
   lines.push("- When you are directly addressed (mentioned / asked), ALWAYS give a non-empty public reply. Use react-only for pure acknowledgments or social confirmations — never as the answer to a substantive question.");
 
   lines.push(`\n- **List all connectors**: \`curl ${gatewayUrl}/api/connectors\``);
-  lines.push(`- Channel IDs and connector config can be found in \`~/.jinn/config.yaml\``);
+  lines.push(`- Channel IDs and connector config can be found in \`~/.openbanto/config.yaml\``);
   return lines.join("\n");
 }
 
@@ -842,7 +844,7 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig): string 
     lines.push(`2. What should ${portalName} help you automate? (code reviews, deployments, monitoring, etc.)`);
     lines.push(`3. Communication preferences — emoji style, verbosity (concise vs detailed), language`);
     lines.push(`4. Any active projects ${portalName} should know about?`);
-    lines.push(`\nAfter the user responds, write their answers to \`~/.jinn/knowledge/user-profile.md\` and \`~/.jinn/knowledge/preferences.md\`.`);
+    lines.push(`\nAfter the user responds, write their answers to \`~/.openbanto/knowledge/user-profile.md\` and \`~/.openbanto/knowledge/preferences.md\`.`);
     lines.push(`Then proceed to help with their original request.`);
     if (canvasHintApplies) {
       lines.push(
@@ -851,10 +853,10 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig): string 
     }
   } else {
     lines.push(`You learn and evolve over time. When you discover new information about the user, their projects, or their preferences:`);
-    lines.push(`- Update \`~/.jinn/knowledge/user-profile.md\` with business/identity info`);
-    lines.push(`- Update \`~/.jinn/knowledge/preferences.md\` with style/communication preferences`);
-    lines.push(`- Update \`~/.jinn/knowledge/projects.md\` with project details`);
-    lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), update \`~/.jinn/CLAUDE.md\``);
+    lines.push(`- Update \`~/.openbanto/knowledge/user-profile.md\` with business/identity info`);
+    lines.push(`- Update \`~/.openbanto/knowledge/preferences.md\` with style/communication preferences`);
+    lines.push(`- Update \`~/.openbanto/knowledge/projects.md\` with project details`);
+    lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), update \`~/.openbanto/CLAUDE.md\``);
     lines.push(`\nDo this silently — don't announce every file update. Just evolve.`);
     if (canvasHintApplies) {
       lines.push(

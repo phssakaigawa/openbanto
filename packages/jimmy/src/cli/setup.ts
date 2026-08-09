@@ -255,7 +255,7 @@ logging:
 function defaultClaudeMd(portalName: string) {
   return `# ${portalName} AI Gateway
 
-This is the ${portalName} home directory (~/.jinn).
+This is the ${portalName} home directory (~/.openbanto).
 ${portalName} orchestrates Claude Code and Codex as AI engines.
 `;
 }
@@ -346,7 +346,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     }
   }
 
-  // 6. Create ~/.jinn directory structure
+  // 6. Create ~/.openbanto directory structure
   console.log("");
   const created: string[] = [];
 
