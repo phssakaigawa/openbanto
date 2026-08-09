@@ -35,6 +35,7 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 | config 型 | `shared/types.ts`（`engines.default` union / `engines.bob?` / `fallbackEngine?` に `"bob"`） | 型 union に bob を維持 |
 | **★エンジン設定選択の bob 分岐（最重要）** | `sessions/manager.ts`（~437）/ `gateway/api.ts`（~2369）/ `sessions/context.ts`（`buildDelegationProtocol` ~889）の三項演算子 | **bob 分岐が消えると `bin` が claude にフォールバックして起動失敗**（実際に踏んだバグ）。上流がこの三項を refactor したら**必ず bob 分岐を再適用** |
 | resolveBin の bob 案内 | `shared/resolveBin.ts`（`INSTALL_HINTS.bob` = 公式 curl / `formatSpawnError` の basename フォールバック） | 維持 |
+| Web UI にエンジン露出 | `shared/models.ts`（`ENGINE_NAMES`/`SYNTH_DEFAULTS`/`EFFORT_MECHANISM` に `bob`）＋ `packages/web/src/app/settings/page.tsx`（Default Engine 選択肢・「IBM Bob」設定セクション・ローカル `Config` 型に `bob?`） | 上流が `ENGINE_NAMES` や settings を refactor したら bob を再追加。bob はモデル選択なし（キー紐づけ） |
 
 ### B. WhatsApp を optional plugin 化（コア MIT クリーン）
 | 変更 | 場所 | 注意 |

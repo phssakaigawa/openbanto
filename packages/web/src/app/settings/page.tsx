@@ -135,15 +135,17 @@ interface Config {
   gateway?: { port?: number; host?: string }
   engines?: {
     default?: string
+    bob?: { bin?: string; model?: string; effortLevel?: string }
     claude?: { bin?: string; model?: string; effortLevel?: string; interactive?: boolean }
     codex?: { bin?: string; model?: string; effortLevel?: string }
+    gemini?: { bin?: string; model?: string; effortLevel?: string }
   }
   sessions?: {
     maxDurationMinutes?: number
     maxCostUsd?: number
     interruptOnNewMessage?: boolean
     rateLimitStrategy?: "wait" | "fallback"
-    fallbackEngine?: "codex"
+    fallbackEngine?: "codex" | "bob"
   }
   connectors?: {
     slack?: {
@@ -1178,11 +1180,13 @@ export default function SettingsPage() {
                 </FieldRow>
                 <FieldRow label="Default Engine">
                   <SettingsSelect
-                    value={config.engines?.default ?? "claude"}
+                    value={config.engines?.default ?? "bob"}
                     onChange={(v) => updateConfig(["engines", "default"], v)}
                     options={[
+                      { value: "bob", label: "IBM Bob" },
                       { value: "claude", label: "Claude" },
                       { value: "codex", label: "Codex" },
+                      { value: "gemini", label: "Gemini" },
                     ]}
                   />
                 </FieldRow>
@@ -1190,6 +1194,28 @@ export default function SettingsPage() {
 
               {/* -- Section 4: Engine Configuration -- */}
               <Section title="エンジン設定">
+                <div
+                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
+                >
+                  IBM Bob（既定）
+                </div>
+                <FieldRow label="Binary Path">
+                  <SettingsInput
+                    value={config.engines?.bob?.bin ?? ""}
+                    onChange={(v) =>
+                      updateConfig(["engines", "bob", "bin"], v)
+                    }
+                    placeholder="bob"
+                  />
+                </FieldRow>
+                <div
+                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
+                >
+                  モデルは Bob の team / API キーに紐づくため選択不要です。認証は <code>BOB_API_KEY</code> 環境変数で渡します。
+                </div>
+                <div
+                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
+                />
                 <div
                   className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
                 >
