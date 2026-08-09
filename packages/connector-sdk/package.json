@@ -1,0 +1,42 @@
+{
+  "name": "@openbanto/connector-sdk",
+  "version": "0.1.0",
+  "description": "Connector plugin contract for OpenBanto — implement this to add a chat/messaging connector (Slack, Discord, LINE WORKS, ...) as an external plugin, without editing the OpenBanto core.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "openbanto",
+    "connector",
+    "plugin",
+    "sdk",
+    "chatops"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phssakaigawa/openbanto.git",
+    "directory": "packages/connector-sdk"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
