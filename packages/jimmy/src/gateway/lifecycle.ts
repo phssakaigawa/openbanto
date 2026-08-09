@@ -201,7 +201,7 @@ function systemctlActive(scopeArgs: string[], service: string): boolean {
  * was running, so nothing was restarted.
  */
 export function restartGateway(serviceName?: string): RestartResult {
-  const service = serviceName || process.env.RYOKO_SERVICE || DEFAULT_SERVICE;
+  const service = serviceName || process.env.OPENBANTO_SERVICE || process.env.RYOKO_SERVICE || DEFAULT_SERVICE;
 
   if (hasSystemctl()) {
     if (systemctlActive(["--user"], service)) {

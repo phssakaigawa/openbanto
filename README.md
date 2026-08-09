@@ -18,20 +18,20 @@ Slack の表を仕切る **AI 番頭**として常駐します。**Slackファ�
 
 ---
 
-## 💡 OpenBantoが解く問題
+## 💡 解く問題（Slack 同僚としての土台 — OpenRyoko 由来）
 
-社内 Slack に AI を住まわせると、すぐ3つの壁にぶつかります：
+OpenBanto は [OpenRyoko](https://github.com/rsensui2/OpenRyoko) の「Slack で使える AI 同僚」の土台をそのまま継承しています。社内 Slack に AI を住まわせると、すぐ3つの壁にぶつかります：
 
 1. **「うざい」問題** — 雑談に割り込んでくる、誰宛か分からない発言に毎回反応する
 2. **「中途半端」問題** — 1ターンで返事して止まる。長い作業の途中でユーザーが「続けて」「次は？」を投げ続けないといけない
 3. **「見えない」問題** — 何が動いてるのか、何が詰まってるのか、Slack の会話ログを遡らないと分からない
 
-OpenBanto はこの3つを**Slack側のメカニズムごと用意**して解決します：
+これらを **Slack 側のメカニズムごと用意して解決する**のが OpenRyoko の肝で、OpenBanto もそのまま使えます（OpenBanto 自身の追加は engine を IBM Bob にした点）：
 
-| 問題 | OpenBanto の解 | 実装 |
+| 問題 | 解（OpenRyoko 由来） | 実装 |
 |---|---|---|
-| ① うざい | **空気読みトリアージ** — メッセージ毎に Haiku が silent/react/reply を判定。確信度60%未満は黙る | `slack/triage.ts` |
-| ② 中途半端 | **エンジンの自律実行**（既定 IBM Bob のエージェント実行が複数ステップを完遂）。Claude Code エンジン時は自然言語 `/goal` で Stop hook を起動。各ターンの応答が個別 Slack メッセージで届く | `slack/goal-extractor.ts` / `engines/` |
+| ① うざい | **空気読みトリアージ** — メッセージ毎に軽量モデルが silent/react/reply を判定。確信度60%未満は黙る | `slack/triage.ts` |
+| ② 中途半端 | **エンジンの自律実行**（OpenBanto は既定 IBM Bob が複数ステップを完遂／Claude Code 時は `/goal` の Stop hook）。各ターンの応答が個別 Slack メッセージで届く | `slack/goal-extractor.ts` / `engines/` |
 | ③ 見えない | **Agents View Canvas** — running/waiting/errored/idle の全セッションを Slack チャンネルのタブとして30秒毎ライブ同期 | `slack/agents-canvas.ts` |
 
 ---
@@ -156,23 +156,23 @@ Claude Code CLI を子プロセスとして起動すると Anthropic の公式�
 
 ```bash
 npm install -g openbanto
-ryoko setup
-ryoko start
+openbanto setup
+openbanto start
 ```
 
-アップデートは `ryoko update`。稼働中のゲートウェイをそのまま新コードに載せ替えたい場合は `ryoko update --restart` を使うと、更新・マイグレーション後に自動で再起動します（systemd ユニット → フォークデーモンの順に検出。systemd ユニット名は `--service <name>` か環境変数 `RYOKO_SERVICE` で上書き可、既定は `openbanto`）。
+アップデートは `openbanto update`。稼働中のゲートウェイをそのまま新コードに載せ替えたい場合は `openbanto update --restart` を使うと、更新・マイグレーション後に自動で再起動します（systemd ユニット → フォークデーモンの順に検出。systemd ユニット名は `--service <name>` か環境変数 `OPENBANTO_SERVICE` で上書き可、既定は `openbanto`）。
 
 ### ソースから入れる（開発・改造向け）
 
 ```bash
 git clone https://github.com/phssakaigawa/openbanto.git
-cd OpenBanto
+cd openbanto
 pnpm install
 pnpm build
 npm install -g ./packages/jimmy
 
-ryoko setup
-ryoko start
+openbanto setup
+openbanto start
 ```
 
 ブラウザで [http://localhost:7777](http://localhost:7777) を開くとダッシュボードが表示されます。
@@ -181,7 +181,7 @@ ryoko start
 
 ```
                           +----------------+
-                          |   ryoko CLI    |
+                          | openbanto CLI  |
                           +-------+--------+
                                   |
                           +-------v--------+
@@ -193,7 +193,7 @@ ryoko start
               |                 |  |                  |
       +-------v-------+ +------v------+  +-----------v---+
       |    エンジン    | |  コネクタ    |  |    Web UI     |
-      |Claude|Codex|Gem| | Slack|WA|DC |  | localhost:7777|
+      |Bob|Claude|Cdx| | Slack|WA|DC |  | localhost:7777|
       +----------------+ +-------------+  +---------------+
               |                 |
       +-------v-------+ +------v------+
@@ -206,7 +206,7 @@ CLI がゲートウェイデーモンにコマンドを送信。デーモンがA
 
 ## ⚙️ 設定
 
-OpenBantoは `~/.openbanto/config.yaml` から設定を読み込みます（`~/.jinn/` が既存の場合、初回起動時に自動マイグレーション）。
+OpenBantoは `~/.openbanto/config.yaml` から設定を読み込みます（`~/.ryoko/` や `~/.jinn/` が既存の場合、初回起動時に自動マイグレーション）。
 
 ```yaml
 gateway:
@@ -274,7 +274,7 @@ OpenBanto/
 
 ```bash
 git clone https://github.com/phssakaigawa/openbanto.git
-cd OpenBanto
+cd openbanto
 pnpm install
 pnpm setup   # 一回限り: 全パッケージビルド + ~/.openbanto 作成
 pnpm dev     # ゲートウェイ + Next.js dev サーバーをホットリロードで起動
@@ -301,25 +301,25 @@ pnpm dev     # ゲートウェイ + Next.js dev サーバーをホットリロ�
 ## 🖥️ Linux サーバーで常駐させる（systemd）
 
 VPS等で 24/7 稼働させたい場合、`scripts/systemd/` に systemd unit テンプレートと
-インストーラを用意しています。これを使えば「`spawn claude ENOENT`」「rootだとClaude
-CLIに弾かれる」「クラッシュ後に手動で立ち上げ直し」といったお決まりの落とし穴を
-回避できます。
+インストーラを用意しています。これを使えば「エンジン CLI が PATH に無く `spawn … ENOENT`」
+「クラッシュ後に手動で立ち上げ直し」といったお決まりの落とし穴を回避できます。
 
 ```bash
 # 1. 専用ユーザーを作成（rootで動かさない）
-sudo useradd -m -s /bin/bash ryoko
+sudo useradd -m -s /bin/bash openbanto
 
 # 2. その ryoko ユーザーで Node 22+ と OpenBanto をインストール
-sudo -u ryoko -i bash -lc '
+sudo -u openbanto -i bash -lc '
   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
   source ~/.nvm/nvm.sh
   nvm install 22
-  npm install -g openbanto @anthropic-ai/claude-code
-  ryoko setup
+  npm install -g openbanto
+  curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash   # 既定エンジン IBM Bob
+  openbanto setup
 '
 
 # 3. systemd unit を /etc/systemd/system/ に配置して enable
-sudo ./scripts/systemd/install.sh ryoko
+sudo ./scripts/systemd/install.sh openbanto
 
 # 4. ログ追跡
 journalctl -u openbanto -f
@@ -330,12 +330,12 @@ unit ファイルに焼き込みます。手動で `openbanto.service` をコピ
 テンプレート先頭のコメント（User / WorkingDirectory / Environment=PATH=… /
 ExecStart）を必ず編集してください。
 
-常駐運用ではアップデートと再起動を `ryoko update --restart` の1コマンドで完結できます。
+常駐運用ではアップデートと再起動を `openbanto update --restart` の1コマンドで完結できます。
 この unit（`openbanto`）を自動検出して `systemctl restart` を実行します（直接の権限が無い場合は
-`sudo -n` を試行）。ユニット名が異なる場合は `--service <name>` か環境変数 `RYOKO_SERVICE` で指定してください。
+`sudo -n` を試行）。ユニット名が異なる場合は `--service <name>` か環境変数 `OPENBANTO_SERVICE` で指定してください。
 
-> **rootで動かしたい場合**: 非推奨ですが、OpenBanto が `IS_SANDBOX=1` を自動付与
-> するので Claude CLI の root 拒否はバイパスされます。それでも専用ユーザー運用を強く推奨します。
+> **rootで動かしたい場合**: 非推奨。専用ユーザー運用を強く推奨します（Claude エンジン使用時は
+> root 拒否があり、OpenBanto が `IS_SANDBOX=1` を自動付与してバイパスします）。
 
 ## ⚙️ Web UI からの設定変更
 
@@ -346,9 +346,13 @@ ExecStart）を必ず編集してください。
 Settings → エンジン設定 には **「インタラクティブPTY（Max定額）」トグル** もあり、
 `engines.claude.interactive` を切替できます（6/15 の Claude 改定対応）。エンジンの選択は
 起動時に確定するため、このトグルの反映には**ゲートウェイの再起動が必要**です
-（`ryoko update --restart` か `ryoko stop && ryoko start`）。
+（`openbanto update --restart` か `openbanto stop && openbanto start`）。
 
-## 🎯 自然言語 `/goal` — 自律完遂タスク
+## 🎯 自然言語 `/goal` — 自律完遂タスク（Claude Code エンジン使用時）
+
+> ℹ️ `/goal` の Stop hook による多ターン自律完遂は **Claude Code エンジン固有**の機能です
+> （`engines.default: claude`）。既定の IBM Bob エンジンは、`bob run` 自身のエージェント実行で
+> 複数ステップを完遂します。以下は Claude Code に切り替えた場合の説明です。
 
 Claude Code v2.1.139+ で追加された `/goal` コマンドを、Slackの自然な日本語/英語から
 自動起動できます。

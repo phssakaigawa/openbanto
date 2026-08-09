@@ -5,7 +5,7 @@
 #   1. User= と Group= を実在するユーザーに（rootは強く非推奨）
 #   2. WorkingDirectory= をそのユーザーのホームに
 #   3. Environment=PATH= に Node.js (nvm 等) と CLI のディレクトリを追加
-#   4. ExecStart= の `ryoko` をフルパスに置換
+#   4. ExecStart= の `openbanto` をフルパスに置換
 #
 # 配置: /etc/systemd/system/openbanto.service
 # 反映:
@@ -16,7 +16,7 @@
 
 [Unit]
 Description=OpenBanto AI Gateway (Slack/Discord/Web)
-Documentation=https://github.com/rsensui2/OpenBanto
+Documentation=https://github.com/phssakaigawa/openbanto
 After=network-online.target
 Wants=network-online.target
 
@@ -27,22 +27,22 @@ Type=simple
 # rootで起動すると Claude CLI が拒否します。childEnv.ts が
 # IS_SANDBOX=1 を自動付与してバイパスはしますが、それでも
 # 専用ユーザーで動かすことを強く推奨します。
-User=ryoko
-Group=ryoko
-WorkingDirectory=/home/ryoko
+User=openbanto
+Group=openbanto
+WorkingDirectory=/home/openbanto
 
 # ---- PATH（spawn claude ENOENT 対策） ----
 # systemd は最小 PATH しか継承しません。nvm 配下の node/npm/claude が
 # PATH に無いと `spawn claude ENOENT` で死にます。実際のパスに合わせて編集。
 Environment=NODE_ENV=production
-Environment=PATH=/home/ryoko/.nvm/versions/node/v22.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/home/openbanto/.nvm/versions/node/v22.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Anthropic 公式 CLI が「rootでは動かしません」と弾くのを抑止する保険。
 # childEnv.ts でも自動付与されますが、こちらで明示しておくと安全です。
 Environment=IS_SANDBOX=1
 
 # ---- 起動コマンド ----
-# `which ryoko` で得たフルパスに置き換えてください。
-ExecStart=/usr/local/bin/ryoko start
+# `which openbanto` で得たフルパスに置き換えてください。
+ExecStart=/usr/local/bin/openbanto start
 
 # ---- 自動再起動 ----
 # クラッシュ時は5秒後に自動復旧。短時間で何度もクラッシュするとループするので、
@@ -67,7 +67,7 @@ SyslogIdentifier=openbanto
 # PrivateTmp=true
 # ProtectSystem=strict
 # ProtectHome=read-only
-# ReadWritePaths=/home/ryoko/.ryoko
+# ReadWritePaths=/home/openbanto/.openbanto
 
 [Install]
 WantedBy=multi-user.target

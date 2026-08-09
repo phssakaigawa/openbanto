@@ -7,7 +7,7 @@
 #
 # USER を省略すると、現在の SUDO_USER（sudo 元のユーザー）を採用します。
 # このスクリプトは:
-#   1. ryoko / node / npm のフルパスを `command -v` で検出
+#   1. openbanto / node / npm のフルパスを `command -v` で検出
 #   2. ~ユーザー/.nvm/... まで含めた PATH を組み立て
 #   3. テンプレートを /etc/systemd/system/openbanto.service に配置
 #   4. systemctl daemon-reload + enable + start を実行
@@ -22,7 +22,7 @@ fi
 TARGET_USER="${1:-${SUDO_USER:-}}"
 if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
   echo "ERROR: OpenBanto を実行する非rootユーザーを指定してください: sudo $0 USER" >&2
-  echo "        例: sudo $0 ryoko" >&2
+  echo "        例: sudo $0 openbanto" >&2
   exit 1
 fi
 
@@ -35,7 +35,7 @@ USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 USER_SHELL="$(getent passwd "$TARGET_USER" | cut -d: -f7)"
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
 
-# ryoko / node を、対象ユーザーの環境で検索。
+# openbanto / node を、対象ユーザーの環境で検索。
 # nvm / asdf / Volta はログインシェルの rc ファイルでしか PATH を設定しないため、
 # 対象ユーザーの「実際の」ログインシェルでサブコマンドを実行する。bash 以外
 # (zsh / fish 等) を使っているサーバーアカウントでも auto-detect を効かせるため。
@@ -53,10 +53,10 @@ run_as_user() {
   printf "%s" "$out"
 }
 
-RYOKO_BIN="$(run_as_user 'command -v ryoko')"
+OPENBANTO_BIN="$(run_as_user 'command -v openbanto')"
 NODE_BIN="$(run_as_user 'command -v node')"
-if [[ -z "$RYOKO_BIN" ]]; then
-  echo "ERROR: ユーザー '$TARGET_USER' の PATH に ryoko が見つかりません。" >&2
+if [[ -z "$OPENBANTO_BIN" ]]; then
+  echo "ERROR: ユーザー '$TARGET_USER' の PATH に openbanto が見つかりません。" >&2
   echo "        npm install -g openbanto を $TARGET_USER で先に実行してください。" >&2
   exit 1
 fi
@@ -99,7 +99,7 @@ fi
 
 echo "==> ユーザー        : $TARGET_USER ($TARGET_GROUP)"
 echo "==> ホーム          : $USER_HOME"
-echo "==> ryoko バイナリ  : $RYOKO_BIN"
+echo "==> openbanto バイナリ  : $OPENBANTO_BIN"
 echo "==> node バイナリ   : $NODE_BIN"
 echo "==> Environment PATH: $SAFE_PATH"
 echo
@@ -110,7 +110,7 @@ sed \
   -e "s|^Group=.*|Group=$TARGET_GROUP|" \
   -e "s|^WorkingDirectory=.*|WorkingDirectory=$USER_HOME|" \
   -e "s|^Environment=PATH=.*|Environment=PATH=$SAFE_PATH|" \
-  -e "s|^ExecStart=.*|ExecStart=$RYOKO_BIN start|" \
+  -e "s|^ExecStart=.*|ExecStart=$OPENBANTO_BIN start|" \
   "$UNIT_SRC" > "$UNIT_DST"
 
 chmod 0644 "$UNIT_DST"

@@ -95,7 +95,7 @@ program
   .description("OpenBanto CLIを最新版に更新し、インスタンス移行を適用する")
   .option("--no-migrate", "CLI更新後の ryoko migrate --auto をスキップする")
   .option("--restart", "更新後にゲートウェイを再起動する（systemd → デーモンの順に検出）")
-  .option("--service <name>", "再起動する systemd ユニット名（既定: openbanto / 環境変数 RYOKO_SERVICE）")
+  .option("--service <name>", "再起動する systemd ユニット名（既定: openbanto / 環境変数 OPENBANTO_SERVICE（旧 RYOKO_SERVICE 可））")
   .action(async (opts) => {
     const { runUpdate } = await import("../src/cli/update.js");
     await runUpdate(opts);
