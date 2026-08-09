@@ -1,4 +1,7 @@
-import TelegramBot from "node-telegram-bot-api";
+// node-telegram-bot-api is an OPTIONAL peer dependency — NOT bundled in the core.
+// Install it to enable Telegram:  npm i node-telegram-bot-api
+// Loaded lazily (dynamic import) so the core builds and runs without it.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type {
   Connector,
   ConnectorCapabilities,
@@ -12,9 +15,28 @@ import { deriveSessionKey, buildReplyContext, isOldTelegramMessage } from "./thr
 import { formatResponse } from "./format.js";
 import { logger } from "../../shared/logger.js";
 
+type SendMessageOptions = any;
+
+let TelegramBotCtor: any;
+async function loadTelegram(): Promise<void> {
+  if (TelegramBotCtor) return;
+  const pkg = "node-telegram-bot-api";
+  let mod: any;
+  try {
+    mod = await import(pkg);
+  } catch {
+    throw new Error(
+      "Telegram connector requires the optional 'node-telegram-bot-api' package, " +
+        "which is not bundled with OpenBanto. Enable Telegram with: npm i node-telegram-bot-api",
+    );
+  }
+  TelegramBotCtor = mod.default ?? mod;
+}
+
 export class TelegramConnector implements Connector {
   name = "telegram";
-  private bot: TelegramBot;
+  private bot: any = null;
+  private readonly config: TelegramConnectorConfig;
   private handler: ((msg: IncomingMessage) => void) | null = null;
   private readonly allowedUsers: Set<number> | null;
   private readonly ignoreOldMessagesOnBoot: boolean;
@@ -31,7 +53,7 @@ export class TelegramConnector implements Connector {
   };
 
   constructor(config: TelegramConnectorConfig) {
-    this.bot = new TelegramBot(config.botToken, { polling: false });
+    this.config = config;
     this.ignoreOldMessagesOnBoot = config.ignoreOldMessagesOnBoot !== false;
     this.allowedUsers =
       config.allowFrom && config.allowFrom.length > 0
@@ -41,6 +63,8 @@ export class TelegramConnector implements Connector {
 
   async start(): Promise<void> {
     try {
+      await loadTelegram();
+      this.bot = new TelegramBotCtor(this.config.botToken, { polling: false });
       const me = await this.bot.getMe();
       logger.info(`[telegram] Bot started: @${me.username} (id: ${me.id})`);
       this.bot.startPolling();
@@ -53,7 +77,10 @@ export class TelegramConnector implements Connector {
       return;
     }
 
-    this.bot.on("message", async (telegramMsg) => {
+    // `telegramMsg: any` — annotated so the core still type-checks with the
+    // optional node-telegram-bot-api (and its @types) uninstalled. Behaviour
+    // unchanged; not a re-conversion of the telegram connector.
+    this.bot.on("message", async (telegramMsg: any) => {
       // Skip bot messages
       if (telegramMsg.from?.is_bot) {
         logger.debug("[telegram] Skipping bot message");
@@ -143,7 +170,7 @@ export class TelegramConnector implements Connector {
   private async safeSend(
     chatId: string,
     text: string,
-    opts: TelegramBot.SendMessageOptions = {},
+    opts: SendMessageOptions = {},
   ): Promise<string | undefined> {
     try {
       const result = await this.bot.sendMessage(chatId, text, {
@@ -182,7 +209,7 @@ export class TelegramConnector implements Connector {
       target.replyContext?.messageId != null
         ? Number(target.replyContext.messageId)
         : undefined;
-    const opts: TelegramBot.SendMessageOptions = {};
+    const opts: SendMessageOptions = {};
     if (replyToId) {
       opts.reply_to_message_id = replyToId;
     }

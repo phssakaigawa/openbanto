@@ -1,4 +1,8 @@
-import type { Message } from "discord.js";
+// discord.js is an optional peer dep (see ./index.ts) — not statically importable
+// from the core. These helpers only touch a small structural subset of a Discord
+// message, so we type the parameter as `any` rather than pulling in discord.js.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Message = any;
 
 export function deriveSessionKey(message: Message, prefix = "discord"): string {
   if (message.channel.isDMBased()) {

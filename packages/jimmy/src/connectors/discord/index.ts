@@ -1,12 +1,37 @@
-import {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  type Message,
-  type TextChannel,
-  type DMChannel,
-  type ThreadChannel,
-} from "discord.js";
+// discord.js is an OPTIONAL peer dependency — NOT bundled in the core.
+// Install it to enable Discord:  npm i discord.js
+// Loaded lazily (dynamic import) so the core builds and runs without it.
+// Mirrors the whatsapp/baileys and telegram optional-dep pattern.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Message = any;
+type TextChannel = any;
+type DMChannel = any;
+type ThreadChannel = any;
+
+let ClientCtor: any;
+let GatewayIntentBits: any;
+let Partials: any;
+
+async function loadDiscord(): Promise<void> {
+  if (ClientCtor) return;
+  const pkg = "discord.js";
+  let mod: any;
+  try {
+    mod = await import(pkg);
+  } catch {
+    throw new Error(
+      "Discord connector requires the optional 'discord.js' package, " +
+        "which is not bundled with OpenBanto. Enable Discord with: npm i discord.js",
+    );
+  }
+  const ns: any = mod.default ?? mod;
+  // discord.js exposes its values as named exports on the ESM namespace; fall
+  // back to the default export for CJS interop.
+  const src: any = mod.Client ? mod : ns;
+  ClientCtor = src.Client;
+  GatewayIntentBits = src.GatewayIntentBits;
+  Partials = src.Partials;
+}
 import type {
   Connector,
   ConnectorCapabilities,
@@ -39,7 +64,7 @@ export interface DiscordConnectorConfig {
 export class DiscordConnector implements Connector {
   name: string;
   instanceId: string;
-  private client: Client;
+  private client: any = null;
   private config: DiscordConnectorConfig;
   private handler: ((msg: IncomingMessage) => void) | null = null;
   private bootTimeMs = Date.now();
@@ -67,16 +92,9 @@ export class DiscordConnector implements Connector {
         ? [config.allowFrom]
         : [],
     );
-    this.client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.GuildMessageReactions,
-      ],
-      partials: [Partials.Channel, Partials.Message],
-    });
+    // NOTE: the discord.js Client is created lazily in start() (after
+    // loadDiscord()) so the constructor stays synchronous and the heavy
+    // dependency is only required when the connector is actually started.
   }
 
   onMessage(handler: (msg: IncomingMessage) => void): void {
@@ -88,12 +106,24 @@ export class DiscordConnector implements Connector {
   }
 
   async start(): Promise<void> {
+    await loadDiscord();
+    this.client = new ClientCtor({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMessageReactions,
+      ],
+      partials: [Partials.Channel, Partials.Message],
+    });
+
     this.client.on("ready", () => {
       logger.info(`Discord connector ready as ${this.client.user?.tag}`);
       this.status = "running";
     });
 
-    this.client.on("messageCreate", async (message) => {
+    this.client.on("messageCreate", async (message: Message) => {
       try {
         await this.handleMessage(message);
       } catch (err) {
@@ -101,7 +131,7 @@ export class DiscordConnector implements Connector {
       }
     });
 
-    this.client.on("error", (err) => {
+    this.client.on("error", (err: any) => {
       this.lastError = err.message;
       this.status = "error";
       logger.error(`Discord client error: ${err.message}`);
@@ -112,7 +142,7 @@ export class DiscordConnector implements Connector {
 
   async stop(): Promise<void> {
     this.status = "stopped";
-    await this.client.destroy();
+    await this.client?.destroy();
     logger.info("Discord connector stopped");
   }
 
@@ -269,7 +299,7 @@ export class DiscordConnector implements Connector {
 
     // Download attachments
     const attachments = await Promise.all(
-      Array.from(message.attachments.values()).map(async (att) => {
+      Array.from(message.attachments.values()).map(async (att: any) => {
         try {
           const localPath = await downloadAttachment(att.url, TMP_DIR, att.name);
           return { name: att.name, localPath, mimeType: att.contentType ?? "application/octet-stream" };
@@ -312,7 +342,7 @@ export class DiscordConnector implements Connector {
   /** Forward a message to a remote Jinn instance via HTTP */
   private async proxyToRemote(remoteUrl: string, message: Message): Promise<void> {
     try {
-      const attachments = Array.from(message.attachments.values()).map((att) => ({
+      const attachments = Array.from(message.attachments.values()).map((att: any) => ({
         name: att.name,
         url: att.url,
         mimeType: att.contentType ?? "application/octet-stream",
