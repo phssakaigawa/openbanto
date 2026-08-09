@@ -9,7 +9,7 @@ Slack の表を仕切る **AI 番頭**として常駐します。**Slackファ�
 （エンジンは設定で claude / codex / gemini にも切替可能）
 
 <p align="center">
-  <img src="assets/ryoko-avatar.jpeg" alt="Banto" width="240" />
+  <img src="assets/banto-avatar.png" alt="Banto — 番頭" width="240" />
 </p>
 
 <p align="center">
