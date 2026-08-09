@@ -1268,7 +1268,7 @@ export default function SettingsPage() {
                   有効にすると Claude の作業ターンを PTY（cc_entrypoint=cli）で実行します。
                   Claude CLI が Max サブスクリプションでログイン済みなら、API 従量課金ではなく Max 側の利用枠で実行されます。
                   SSH リモート実行の従業員は headless <code>claude -p</code> にフォールバックします。
-                  <strong>変更の反映にはゲートウェイの再起動が必要です</strong>（保存後に <code>ryoko stop &amp;&amp; ryoko start</code> など）。
+                  <strong>変更の反映にはゲートウェイの再起動が必要です</strong>（保存後に <code>openbanto stop &amp;&amp; openbanto start</code> など）。
                 </div>
 
                 <div
