@@ -12,10 +12,6 @@ Slack の表を仕切る **AI 番頭**として常駐します。**Slackファ�
   <img src="assets/banto-avatar.png" alt="Banto — 番頭" width="240" />
 </p>
 
-<p align="center">
-  <img src="assets/jinn-showcase.gif" alt="OpenBanto Web Dashboard" width="800" />
-</p>
-
 > 🪶 **OpenBanto は [OpenRyoko](https://github.com/rsensui2/OpenRyoko)（MIT License）のフォーク**で、LLMエンジンに **IBM Bob（bobshell）** を採用した派生版です。OpenRyoko は [Jinn](https://github.com/hristo2612/jinn)（MIT License, by Hristo Stoyanov）の AI 組織・cron・Web ダッシュボードといった土台レイヤーを継承しつつ、Slack 上での**振る舞い**（空気読み・自律完遂・状態可視化）を大きく前進させた設計です。完全な帰属表示は [`NOTICE`](./NOTICE) を参照。
 >
 > ℹ️ OpenBanto は独立した OSS であり、**IBM 公式プロジェクトではありません**（"IBM" / "Bob" は IBM の商標）。
