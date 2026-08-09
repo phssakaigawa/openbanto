@@ -1,0 +1,25 @@
+OpenBanto
+Copyright (c) 2026 OpenBanto contributors
+
+This product is a derivative work distributed under the MIT License. It is
+based on:
+
+  * OpenRyoko (MIT License)
+    https://github.com/rsensui2/OpenRyoko
+
+  which is itself based on:
+
+  * Jinn (MIT License), Copyright (c) 2026 Jimmy AI Contributors / Hristo Stoyanov
+    https://github.com/hristo2612/jinn
+
+The upstream MIT license text and copyright notice are retained verbatim in the
+LICENSE file, as required by the MIT License.
+
+--------------------------------------------------------------------------------
+Trademark notice
+
+"IBM", "IBM Bob", and "Bob" are trademarks of International Business Machines
+Corporation. OpenBanto integrates with the IBM Bob CLI by invoking it as a
+separate program; it does not bundle or redistribute IBM software. OpenBanto is
+an independent open-source project and is NOT affiliated with, endorsed by, or
+sponsored by IBM.

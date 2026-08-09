@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.turbo/
+*.log
+.env
+.env.*
+.DS_Store
+**/.DS_Store
+# runtime home / secrets are outside the repo (~/.openbanto)

@@ -1,0 +1,91 @@
+jinn:
+  version: "0.3.0"
+
+gateway:
+  port: 7777
+  host: "127.0.0.1"
+
+engines:
+  default: claude
+  claude:
+    bin: claude
+    # Opus 5 の明示 ID。裸の "opus" エイリアスはインストール済み Claude CLI が
+    # 知っている最新 Opus に解決されるため、CLI が古いと旧世代（4.8 等）に留まる。
+    # 明示 ID は API パススルーなので CLI バージョンに関係なく Opus 5 が使われる。
+    model: claude-opus-5
+    effortLevel: xhigh
+    # Interactive PTY mode (opt-in). When true, Claude work turns run as an
+    # interactive PTY (cc_entrypoint=cli) which bills against the Max subscription
+    # instead of metered API usage. Turns resolve via Claude Code Stop hooks.
+    # Default false = headless `claude -p`. sshHost employees keep using `-p`.
+    # interactive: false
+    # maxLivePtys: 8   # max simultaneously-live PTYs (LRU-evicted) when interactive
+  codex:
+    bin: codex
+    # GPT-5.6 の3ティア: gpt-5.6-sol(上) / gpt-5.6-terra(中) / gpt-5.6-luna(小)
+    # 注意: 裸の "gpt-5.6" エイリアスは ChatGPT アカウントの Codex では 400 になる。明示 ID を使うこと
+    model: gpt-5.6-sol
+    effortLevel: high
+
+connectors:
+  slack:
+    shareSessionInChannel: false
+    ignoreOldMessagesOnBoot: true
+    # 空気読み（air-reading）トリアージ層
+    # 有効化すると、Slack受信メッセージごとに軽量LLMで
+    # silent/react/replyを判定し、不要な反応を抑制する。
+    # triage:
+    #   enabled: true
+    #   engine: codex        # claude | codex
+    #   model: gpt-5-nano    # 軽量モデル推奨（gpt-5.6-luna / claude-haiku-4-5 も可）
+    #   timeoutMs: 20000
+    #   threadContextLimit: 10
+    #
+    # 自然言語の「最後までやって」を /goal に変換する判定。
+    # 遅いためデフォルトはオフ。/goal 実行自体は Claude セッション専用。
+    # goalExtraction:
+    #   enabled: false
+    #   engine: codex
+    #   model: gpt-5-nano
+    #   timeoutMs: 30000
+
+# MCPサーバーは従業員にブラウザ・検索・メッセージング機能を提供する。
+# Claude Codeセッションに --mcp-config 経由で自動注入される。
+mcp:
+  browser:
+    enabled: true
+    provider: playwright   # または "puppeteer"
+  search:
+    enabled: false         # trueにしてapiKeyを指定するかBRAVE_API_KEY環境変数をセット
+    provider: brave
+    # apiKey: ${BRAVE_API_KEY}
+  fetch:
+    enabled: true
+  gateway:
+    enabled: true          # メッセージング・組織・cron・セッション用の内蔵MCPサーバー
+  # custom:
+  #   my-server:
+  #     enabled: true
+  #     command: npx
+  #     args: ["-y", "@my/mcp-server"]
+  #     env:
+  #       API_KEY: ${MY_API_KEY}
+
+# セッション上限（従業員ごとにYAMLで上書き可）
+sessions:
+  maxDurationMinutes: 30
+  maxCostUsd: 10.00
+
+# Cron設定
+cron:
+  # alertConnector: slack
+  # alertChannel: "#alerts"
+
+portal:
+  portalName: Banto
+  language: Japanese
+
+logging:
+  file: true
+  stdout: true
+  level: info

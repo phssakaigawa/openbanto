@@ -1,0 +1,39 @@
+{
+  "name": "openbanto",
+  "private": true,
+  "packageManager": "pnpm@10.6.4",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo build && rm -rf packages/jimmy/dist/web && cp -r packages/web/out packages/jimmy/dist/web",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo run test",
+    "test:e2e": "playwright test",
+    "clean": "rm -rf .turbo node_modules/.cache && turbo clean",
+    "ryoko": "node packages/jimmy/dist/bin/jimmy.js",
+    "setup": "pnpm build && node packages/jimmy/dist/bin/jimmy.js setup",
+    "setup:force": "pnpm build && node packages/jimmy/dist/bin/jimmy.js setup --force",
+    "start": "pnpm clean && pnpm build && node packages/jimmy/dist/bin/jimmy.js start",
+    "stop": "node packages/jimmy/dist/bin/jimmy.js stop",
+    "nuke": "node packages/jimmy/dist/bin/jimmy.js nuke",
+    "status": "node packages/jimmy/dist/bin/jimmy.js status"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "classic-level",
+      "node-pty"
+    ]
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "turbo": "^2.4.0",
+    "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "classic-level": "^2.0.0"
+  }
+}
