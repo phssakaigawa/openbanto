@@ -785,6 +785,10 @@ export async function startGateway(
     clearSuppressNextConnectorReload,
     hookRegistry,
     hookSecret: useInteractiveClaude ? hookSecret : undefined,
+    // Reuse the live guardrail as the plugin-management audit sink. With no
+    // guardrail module configured this is the no-op "allow-all" whose afterTurn
+    // is harmless, so audit falls back to logger.info only.
+    auditSink: guardrail,
   };
 
   // NOTE: replaying pending web queue items is deferred until AFTER the server is

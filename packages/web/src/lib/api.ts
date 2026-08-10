@@ -55,6 +55,22 @@ export interface OrgData {
   hierarchy: OrgHierarchy;
 }
 
+export interface PluginEntry {
+  name: string;
+  kind: "builtin" | "module";
+  module?: string;
+  enabled: boolean;
+  hasConfig: boolean;
+}
+
+export interface PluginsSummary {
+  manageUi: boolean;
+  adminGroup: string;
+  engines: PluginEntry[];
+  connectors: PluginEntry[];
+  guardrails: PluginEntry[];
+}
+
 const BASE =
   typeof window !== "undefined"
     ? window.location.origin
@@ -154,6 +170,28 @@ export const api = {
     patch<{ status: string }>(`/api/org/employees/${name}`, data),
   getDepartmentBoard: (name: string) =>
     get<Record<string, unknown>>(`/api/org/departments/${name}/board`),
+  getPlugins: () => get<PluginsSummary>("/api/plugins"),
+  installPlugin: (data: {
+    pluginType: "engine" | "connector" | "guardrail";
+    name: string;
+    module: string;
+    config?: Record<string, unknown>;
+  }) =>
+    post<{ status: string; needsRestart?: boolean; stderr?: string; message?: string; reloaded?: unknown }>(
+      "/api/plugins/install",
+      data,
+    ),
+  togglePlugin: (data: {
+    pluginType: "engine" | "connector" | "guardrail";
+    name: string;
+    enabled: boolean;
+  }) =>
+    post<{ status: string; needsRestart?: boolean; message?: string }>("/api/plugins/toggle", data),
+  updatePluginConfig: (data: {
+    pluginType: "engine" | "connector" | "guardrail";
+    name: string;
+    config: Record<string, unknown>;
+  }) => put<{ status: string; needsRestart?: boolean; message?: string }>("/api/plugins/config", data),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),
   getSkill: (name: string) => get<Record<string, unknown>>(`/api/skills/${name}`),
   getConfig: () => get<Record<string, unknown>>("/api/config"),

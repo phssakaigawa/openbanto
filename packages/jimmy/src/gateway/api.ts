@@ -58,6 +58,17 @@ import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
 import { handleFilesRequest, ensureFilesDir } from "./files.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
+import {
+  requirePluginAdmin,
+  summarizePlugins,
+  installPlugin,
+  togglePlugin,
+  updatePluginConfig,
+  auditPluginAction,
+  type InstallRequest,
+  type ToggleRequest,
+  type ConfigUpdateRequest,
+} from "./plugins-api.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
@@ -98,6 +109,12 @@ export interface ApiContext {
    */
   hookRegistry?: import("./hook-registry.js").HookRegistry;
   hookSecret?: string;
+  /**
+   * The live guardrail instance (from resolveGuardrail().create()), reused by
+   * the plugin-management API as a structured audit sink. Optional — when a
+   * no-op guardrail is installed its afterTurn is a harmless no-op.
+   */
+  auditSink?: import("./plugins-api.js").AuditSink;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -1408,6 +1425,115 @@ Handle this as a priority request from a colleague.`;
       return json(res, { status: "removed", name: params.name });
     }
 
+    // ---- Plugin management (Gated Install) --------------------------------
+    // Every route here re-checks authorization server-side via
+    // requirePluginAdmin (manageUi flag + admin group / loopback fallback).
+    // See gateway/plugins-api.ts and docs/design/plugin-manage-ui.md.
+    if (pathname === "/api/plugins" || pathname.startsWith("/api/plugins/")) {
+      const gate = requirePluginAdmin(req, context.getConfig());
+      if (!gate.ok) {
+        return json(res, { error: gate.reason || "forbidden" }, gate.status ?? 403);
+      }
+      const who = gate.who || "unknown";
+
+      // GET /api/plugins — aggregate configured plugins
+      if (method === "GET" && pathname === "/api/plugins") {
+        return json(res, summarizePlugins(context.getConfig()));
+      }
+
+      // POST /api/plugins/install
+      if (method === "POST" && pathname === "/api/plugins/install") {
+        const _parsed = await readJsonBody(req, res);
+        if (!_parsed.ok) return;
+        const body = _parsed.body as InstallRequest;
+        const result = await installPlugin(body, context.getConfig());
+        await auditPluginAction(
+          {
+            who,
+            action: "plugin.install",
+            pluginType: body?.pluginType,
+            name: body?.name,
+            module: body?.module,
+            result: result.body.status,
+          },
+          context.auditSink,
+        );
+        if (result.patched) {
+          invalidateModelRegistry();
+          // Connectors hot-reload; engine/guardrail need a restart (needsRestart).
+          if (body.pluginType === "connector" && context.reloadAllConnectors) {
+            try {
+              context.suppressNextConnectorReload?.();
+              const reload = await context.reloadAllConnectors();
+              context.config = context.getConfig();
+              context.emit("connectors:reloaded", reload);
+              result.body.reloaded = reload;
+            } catch (err) {
+              context.clearSuppressNextConnectorReload?.();
+              logger.error(`Plugin install connector reload failed: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
+        return json(res, result.body, result.http);
+      }
+
+      // POST /api/plugins/toggle
+      if (method === "POST" && pathname === "/api/plugins/toggle") {
+        const _parsed = await readJsonBody(req, res);
+        if (!_parsed.ok) return;
+        const body = _parsed.body as ToggleRequest;
+        const result = togglePlugin(body);
+        await auditPluginAction(
+          { who, action: "plugin.toggle", pluginType: body?.pluginType, name: body?.name, result: result.body.status },
+          context.auditSink,
+        );
+        if (result.patched) {
+          invalidateModelRegistry();
+          if (body.pluginType === "connector" && context.reloadAllConnectors) {
+            try {
+              context.suppressNextConnectorReload?.();
+              const reload = await context.reloadAllConnectors();
+              context.config = context.getConfig();
+              context.emit("connectors:reloaded", reload);
+            } catch (err) {
+              context.clearSuppressNextConnectorReload?.();
+              logger.error(`Plugin toggle connector reload failed: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
+        return json(res, result.body, result.http);
+      }
+
+      // PUT /api/plugins/config
+      if (method === "PUT" && pathname === "/api/plugins/config") {
+        const _parsed = await readJsonBody(req, res);
+        if (!_parsed.ok) return;
+        const body = _parsed.body as ConfigUpdateRequest;
+        const result = updatePluginConfig(body);
+        await auditPluginAction(
+          { who, action: "plugin.config", pluginType: body?.pluginType, name: body?.name, result: result.body.status },
+          context.auditSink,
+        );
+        if (result.patched) {
+          invalidateModelRegistry();
+          if (body.pluginType === "connector" && context.reloadAllConnectors) {
+            try {
+              context.suppressNextConnectorReload?.();
+              const reload = await context.reloadAllConnectors();
+              context.config = context.getConfig();
+              context.emit("connectors:reloaded", reload);
+            } catch (err) {
+              context.clearSuppressNextConnectorReload?.();
+              logger.error(`Plugin config reload failed: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
+        return json(res, result.body, result.http);
+      }
+
+      return notFound(res);
+    }
+
     // GET /api/config
     if (method === "GET" && pathname === "/api/config") {
       const config = context.getConfig();
@@ -1470,6 +1596,8 @@ Handle this as a priority request from a colleague.`;
         "stt",
         "skills",
         "remotes",
+        "guardrails",
+        "plugins",
       ];
       const unknownKeys = Object.keys(body).filter((k) => !KNOWN_KEYS.includes(k));
       if (unknownKeys.length > 0) {

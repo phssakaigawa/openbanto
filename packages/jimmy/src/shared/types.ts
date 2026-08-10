@@ -653,6 +653,22 @@ export interface JinnConfig {
     module?: string;
     config?: Record<string, unknown>;
   };
+  /** Optional plugin management UI (Gated Install). This gates a strong,
+   *  code-executing operation (`pnpm add` of arbitrary packages), so it is
+   *  OPT-IN (default `manageUi:false`) and is expected to sit behind an edge
+   *  auth proxy (Keycloak / oauth2-proxy) that injects `X-Forwarded-Email` /
+   *  `X-Forwarded-Groups`. The gateway ALWAYS re-checks the group server-side
+   *  (`requirePluginAdmin`); UI display control is not trusted. See
+   *  docs/design/plugin-manage-ui.md. */
+  plugins?: {
+    /** Master switch. When not exactly `true`, every /api/plugins/* route 403s. */
+    manageUi?: boolean;
+    /** Group that `X-Forwarded-Groups` must contain to be authorized.
+     *  Default "openbanto-admins". */
+    adminGroup?: string;
+    /** Directory to run `pnpm add` in. Defaults to the repo root. */
+    installRoot?: string;
+  };
   context?: {
     /** Max characters for the built system prompt. Defaults to 100000. */
     maxChars?: number;
