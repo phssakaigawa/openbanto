@@ -1,9 +1,40 @@
-# Design (draft): guardrail hooks — approval / permission / audit log
+# Design: guardrail hooks — approval / permission / audit log
 
-Status: **draft / co-design.** Guardrails are a **core** concern (they must wrap
-every turn and every tool write), so the hook *interface* is owned by the core
-side; the extension side supplies the *policies* that run in the hooks. This keeps
-guardrails un-forkable and consistent across engines/connectors.
+Status: **landed (core hook + plugin loader).** Guardrails are a **core** concern
+(they must wrap every turn and every tool write), so the hook *interface* is owned
+by the core side; the extension side supplies the *policies* that run in the hooks.
+This keeps guardrails un-forkable and consistent across engines/connectors.
+
+## Landed shape (as implemented)
+
+Implemented as a third **plugin mechanism**, mirroring connectors and engines:
+
+- **SDK** `packages/guardrail-sdk` (`@openbanto/guardrail-sdk`) — the dependency-0,
+  type-only contract external policy packs implement (`Guardrail`,
+  `GuardrailContext`, `GuardrailDecision`, `GuardrailTurnResult`,
+  `GuardrailPlugin`, `defineGuardrailPlugin`). Structurally identical to the core's
+  own copy so a plugin is assignable at the loader boundary.
+- **Core registry** `packages/jimmy/src/guardrails/registry.ts` — type copy +
+  `resolveGuardrail(module?)` (no `module` → built-in no-op **"allow-all"**;
+  `module` → dynamic `import` with an "Install it: npm i <module>" hint on
+  failure) + `defineGuardrailPlugin`.
+- **Reference plugin** `packages/jimmy/src/guardrails/example.plugin.ts` — a
+  `defineGuardrailPlugin` blocklist policy proving the mechanism end-to-end.
+- **Config** `shared/types.ts` → `JinnConfig.guardrails?: { module?; config? }`.
+- **Boot wiring** `gateway/server.ts` builds the guardrail once
+  (`await (await resolveGuardrail(config.guardrails?.module)).create(config.guardrails?.config ?? {}, { logger, config })`)
+  and injects it into `SessionManager` (same pattern as the engines Map).
+- **Hook points** `sessions/manager.ts` `runSession()`:
+  - `beforeTurn` beside the budget check, before `engine.run()` — `allow` continues;
+    `deny` replies the reason + ends the turn (audit still runs); `require_approval`
+    parks the turn (`parkForApproval` → `queue.pauseQueue` + a decision gate) and
+    exposes `SessionManager.resolveApproval(sessionKey, approved, opts?)`.
+  - `afterTurn` on the main path after `engine.run()` returns — fire-and-forget
+    audit (`ok / cost / tokens`), wrapped so it never throws into the turn.
+
+Opt-in: with no `guardrails` block the no-op guardrail keeps behaviour identical
+to "no guardrail". The approval **UX** (Slack buttons, etc.) is the
+connector/extension's responsibility — the core exposes `resolveApproval()` only.
 
 ## Where hooks sit (turn lifecycle)
 

@@ -80,6 +80,18 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 | config 型を string に開く | `shared/types.ts`（`engines.default`=`EngineName`、各ブロックに `module?`、`[engine:string]` index、`fallbackEngine` に `(string&{})`。`EngineName`/`EngineConfigBlock`/`BuiltinEngineName` 新設） | 既知リテラルの補完は維持しつつ外部エンジン名を許容。runtime schema は無い（YAML cast）ので型だけ |
 | **意図的に残した名前分岐** | rate-limit の**primary**判定（`session.engine === "claude" && strategy==="fallback"` 等）と `oneShotCli.ts` の `buildArgs` per-CLI switch | Claude 特有挙動 / 各 CLI の flag は engine 固有。capability 化しない（理由は engine-plugins.md） |
 
+### H. ガードレールをプラグイン化（コネクタ/エンジン同様の機構、OpenBanto 独自）
+ターン単位の permission / approval / audit を **connector・engine と同じプラグイン方式**で core に組み込んだもの。**opt-in**（未設定なら組込 no-op「allow-all」で挙動不変）。詳細は `docs/design/guardrails-hooks.md`。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| guardrail-sdk パッケージ（新規） | `packages/guardrail-sdk/`（`@openbanto/guardrail-sdk`, 依存0・型のみ・connector-sdk と同型の雛形, publishConfig public） | 外部ガードレールプラグインの契約。core `guardrails/registry.ts` の `Guardrail`/`GuardrailContext`/`GuardrailDecision`/`GuardrailTurnResult`/`GuardrailPlugin` と**構造的に一致**を維持（ロード境界の代入互換条件）。上流が turn 契約を変えたら両方を追随 |
+| guardrail registry（新規） | `packages/jimmy/src/guardrails/registry.ts`（型コピー / `resolveGuardrail(module?)` / 組込 no-op「allow-all」default / `defineGuardrailPlugin`） | connectors/registry.ts と同型。core は SDK を実行時依存にしない（型は自前コピー）。**module 未指定は allow-all を返す（opt-in の要）**。load 失敗は「Install it: npm i <module>」 |
+| 参照実装（新規） | `packages/jimmy/src/guardrails/example.plugin.ts`（`defineGuardrailPlugin`＋blocklist deny＋afterTurn audit `logger.info`） | 「プラグインとして動く」証明。`resolveGuardrail(path)` で読める第1号。README/guardrails-hooks.md に明記 |
+| 起動時注入 | `gateway/server.ts`（`resolveGuardrail(config.guardrails?.module)` → `.create(config.guardrails?.config ?? {}, { logger, config })` を1回、`new SessionManager(config, engines, connectorNames, guardrail)` の第4引数で注入） | engines Map と同じ注入経路。上流の SessionManager 生成箇所変更時に再適用。**guardrail を渡し忘れると SessionManager 側 default（allow-all）に fallback** |
+| ターン実行路の hook（★中核） | `sessions/manager.ts` `runSession()`：**beforeTurn** = budget check の隣（`engine.run` 直前）。allow→続行 / deny→reason 返信+ターン終了（audit も呼ぶ） / require_approval→`parkForApproval`（`queue.pauseQueue`＋decision gate）。**afterTurn** = 主経路の `engine.run` 復帰後（`ok/cost/tokens`、throw を握り潰す）。承認解決は `resolveApproval(sessionKey, approved, opts?)` を公開（承認UIは拡張側） | **★最重要デグレ源: beforeTurn/afterTurn が turn 実行路から外れていないか。** 上流が runSession の budget 近傍や result delivery を書き換えたら、hook 2点を再配置。fallback/retry 分岐は afterTurn 未網羅（主経路のみ）だが、主経路が外れると audit が全滅する |
+| config 型 | `shared/types.ts`（`JinnConfig.guardrails?: { module?: string; config?: Record<string, unknown> }`） | runtime schema は無い（YAML cast）ので型だけ。上流が JinnConfig を再定義したら再追加 |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
@@ -90,6 +102,7 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 4. `paths.ts` の `~/.openbanto` 既定 + 自動 migration（全面上書きされていないか）
 5. `whatsapp/index.ts` が dynamic import のまま / `package.json` の baileys が optional peer のまま
 6. `context.ts` の番頭 identity + 「ご記帳」ONBOARDING
+6b. **★ガードレール hook が turn 実行路から外れていないか**（`sessions/manager.ts` `runSession()` の `beforeTurn`=budget check 隣・`engine.run` 直前 / `afterTurn`=主経路の `engine.run` 復帰後 が残っているか。`gateway/server.ts` が `resolveGuardrail().create()` を SessionManager 第4引数に注入しているか。未設定時に no-op「allow-all」で挙動不変か）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）
 
