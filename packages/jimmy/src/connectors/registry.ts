@@ -114,3 +114,13 @@ export async function resolvePlugin(type: string, module?: string): Promise<Conn
 export function hasBuiltin(type: string): boolean {
   return type in BUILTINS;
 }
+
+/** Built-in connector type names, in a stable order. Consumed by the plugin
+ *  management API to classify a configured connector as builtin vs module. */
+export const BUILTIN_CONNECTOR_TYPES = [
+  "slack",
+  "discord",
+  "discord-remote",
+  "telegram",
+  "whatsapp",
+] as const;

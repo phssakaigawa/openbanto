@@ -94,6 +94,22 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 
 ---
 
+### I. プラグイン管理UI（Gated Install、OpenBanto 独自）
+engine / connector / guardrail の3プラグイン機構を **WebUI + gateway API から閲覧・インストール**できるようにしたもの。install は `pnpm add <module>` を叩く＝**デーモンと同一権限で任意コードを実行する強力操作**なので、**opt-in**（`config.plugins.manageUi:true` 未設定なら全 `/api/plugins/*` が 403）かつ **Keycloak/oauth2-proxy エッジ認証の前段**に置き、**サーバ側でグループを再チェック**する設計。詳細は `docs/design/plugin-manage-ui.md`。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| config 型 | `shared/types.ts`（`JinnConfig.plugins?: { manageUi?: boolean; adminGroup?: string; installRoot?: string }`, 既定 `manageUi:false`・`adminGroup:"openbanto-admins"`） | runtime schema なし（YAML cast）。上流が JinnConfig を再定義したら再追加。`gateway/api.ts` の `PUT /api/config` `KNOWN_KEYS` に `plugins`（と `guardrails`）を追加済 — 上流が KNOWN_KEYS を再定義したら再追加 |
+| gateway API（新規） | `packages/jimmy/src/gateway/plugins-api.ts`（`requirePluginAdmin` / `validateModuleSpec` / `summarizePlugins` / `installPlugin` / `togglePlugin` / `updatePluginConfig` / `auditPluginAction`） | **★セキュリティ中核**。①`manageUi!==true`→403 ②`X-Forwarded-Groups` に `adminGroup` 含む→許可 / ヘッダ無しは **loopback のみ許可** ③module は **npm名 or git+https のみ**（shell メタ文字・ローカルパス拒否）④`pnpm add` は **execFile（argv 配列, シェル非経由）** ⑤全操作を監査。上流が req/socket 形を変えたら loopback 判定を追随 |
+| ルータ配線 | `gateway/api.ts`（`/api/plugins`・`/api/plugins/*` を `handleApiRequest` に追加、`context.auditSink` 追加） | 各ルートで `requirePluginAdmin` を必ず通す。connector は `reloadAllConnectors()` で即 reload、engine/guardrail は `needsRestart:true` を返す |
+| 監査 sink 注入 | `gateway/server.ts`（`apiContext.auditSink = guardrail`） | 起動時 guardrail を監査 sink に流用。guardrail 生成箇所を上流が動かしたら再配線（未注入でも `logger.info` は出る） |
+| registry 露出 | `connectors/registry.ts`（`BUILTIN_CONNECTOR_TYPES` を新規 export） | builtin/module 判定に使用。engine 側は既存 `BUILTIN_ENGINE_NAMES` を流用 |
+| WebUI（新規） | `packages/web/src/app/plugins/page.tsx` + `lib/nav.ts`（`/plugins`）+ `lib/api.ts`（`getPlugins`/`installPlugin`/`togglePlugin`/`updatePluginConfig`+`PluginsSummary`型） | 信頼警告バナー常設・`manageUi:false` 時は無効カード表示で install フォーム非表示。UI 表示制御は**認可の代わりにならない**（サーバ再チェックが本体） |
+| reload 方針 | — | **connector=即 hot-reload**（`reloadAllConnectors`）/ **engine・guardrail=起動時1回生成のため再起動要**（`needsRestart:true`→UI が再起動を促す）。無停止 hot-swap はスコープ外 |
+| 単体テスト | `gateway/__tests__/plugins-api.test.ts`（`validateModuleSpec` の command injection/ローカルパス/protocol 拒否 + `requirePluginAdmin` gate + `summarizePlugins`） | module バリデーションの回帰検知。上流が execFile/シェル配線を触ったら再確認 |
+
+---
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先
@@ -103,6 +119,7 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 5. `whatsapp/index.ts` が dynamic import のまま / `package.json` の baileys が optional peer のまま
 6. `context.ts` の番頭 identity + 「ご記帳」ONBOARDING
 6b. **★ガードレール hook が turn 実行路から外れていないか**（`sessions/manager.ts` `runSession()` の `beforeTurn`=budget check 隣・`engine.run` 直前 / `afterTurn`=主経路の `engine.run` 復帰後 が残っているか。`gateway/server.ts` が `resolveGuardrail().create()` を SessionManager 第4引数に注入しているか。未設定時に no-op「allow-all」で挙動不変か）
+6c. **★プラグイン管理UIのセキュリティ gate が生きているか**（`gateway/plugins-api.ts` `requirePluginAdmin`＝`manageUi` flag→group 再チェック→loopback fallback / `validateModuleSpec` の npm・git+https 限定＋shell メタ拒否 / `pnpm add` が **execFile（シェル非経由）** のままか。`gateway/api.ts` `/api/plugins/*` 各ルートが gate を通しているか。`PUT /api/config` `KNOWN_KEYS` に `plugins`/`guardrails` が残っているか）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）
 

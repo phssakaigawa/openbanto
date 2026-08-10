@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   Activity,
   Zap,
+  Puzzle,
   Settings,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -24,5 +25,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/cron", label: "スケジュール", icon: Clock },
   { href: "/logs", label: "アクティビティ", icon: Activity },
   { href: "/skills", label: "スキル", icon: Zap },
+  { href: "/plugins", label: "プラグイン", icon: Puzzle },
   { href: "/settings", label: "設定", icon: Settings },
 ]
