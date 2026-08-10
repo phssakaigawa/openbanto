@@ -33,7 +33,7 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 | one-shot に bob | `shared/oneShotCli.ts`（`OneShotEngine` union / `defaultBinForEngine` / `buildArgs` / `extractBobResult`） | 上流が OneShotEngine を触ったら bob 分岐を再適用 |
 | エンジン登録 | `gateway/server.ts`（`BobEngine` import・instantiate・`engines.set("bob", …)`・Map 型 union） | 上流の engine セットアップ変更時に再適用 |
 | config 型 | `shared/types.ts`（`engines.default` union / `engines.bob?` / `fallbackEngine?` に `"bob"`） | 型 union に bob を維持 |
-| **★エンジン設定選択の bob 分岐（最重要）** | `sessions/manager.ts`（~437）/ `gateway/api.ts`（~2369）/ `sessions/context.ts`（`buildDelegationProtocol` ~889）の三項演算子 | **bob 分岐が消えると `bin` が claude にフォールバックして起動失敗**（実際に踏んだバグ）。上流がこの三項を refactor したら**必ず bob 分岐を再適用** |
+| **★エンジン設定選択の bob 分岐（最重要）→ registry に集約済** | 旧: `sessions/manager.ts` / `gateway/api.ts` / `sessions/context.ts` / `cli/migrate.ts` の三項×4。**現在は `engines/registry.ts` の `resolveEngineConfig(config, name)` 一箇所に集約**（各サイトはこれを呼ぶだけ） | **bob 分岐が消えると `bin` が claude にフォールバックして起動失敗**（実際に踏んだバグ）。この選択は `resolveEngineConfig` に一元化した＝`engines[name] ?? engines.claude`。**上流がこの三項を復活/refactor したら `resolveEngineConfig` に寄せ直す**（bob/外部エンジンは必ず自分のブロックに解決すること）。詳細は `docs/design/engine-plugins.md` |
 | resolveBin の bob 案内 | `shared/resolveBin.ts`（`INSTALL_HINTS.bob` = 公式 curl / `formatSpawnError` の basename フォールバック） | 維持 |
 | Web UI にエンジン露出 | `shared/models.ts`（`ENGINE_NAMES`/`SYNTH_DEFAULTS`/`EFFORT_MECHANISM` に `bob`）＋ `packages/web/src/app/settings/page.tsx`（Default Engine 選択肢・「IBM Bob」設定セクション・ローカル `Config` 型に `bob?`） | 上流が `ENGINE_NAMES` や settings を refactor したら bob を再追加。bob はモデル選択なし（キー紐づけ） |
 
@@ -67,11 +67,25 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 - `assets/banto-avatar.png`（`jinn-showcase.gif` は Jinn のもの→削除）
 - `scripts/systemd/openbanto.service`（`openryoko.service` から rename。install.sh の参照名と一致させて修理）
 
+### G. エンジンをプラグイン化（コネクタ同様の機構、OpenBanto 独自）
+本質は **A の Bob 対応を「エンジン一般化」に昇格**させたもの。挙動不変。詳細は `docs/design/engine-plugins.md`。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| engine-sdk パッケージ（新規） | `packages/engine-sdk/`（`@openbanto/engine-sdk`, 依存0・型のみ・connector-sdk と同型の雛形） | 外部エンジンプラグインの契約。core `shared/types.ts` の `Engine`/`InterruptibleEngine`/`EngineRunOpts`/`EngineResult`/`StreamDelta` と**構造的に一致**を維持（ロード境界の代入互換条件）。上流が turn 契約を変えたら両方を追随 |
+| エンジン registry（新規） | `packages/jimmy/src/engines/registry.ts`（`BUILTINS` lazy factory / `resolveEngine` / `hasBuiltinEngine` / `CAPABILITIES` テーブル / `engineCapabilities` + predicates / **`resolveEngineConfig`** / `defineEnginePlugin`） | connectors/registry.ts と同型。core は SDK を実行時依存にしない（型は自前コピー）。**capability テーブルが engine 名分岐の唯一の真実** |
+| bob を SDK 第1号に | `engines/bob.plugin.ts`（`defineEnginePlugin`＋`CAPABILITIES.bob`＋lazy `import("./bob.js")`） | bob.ts 本体は不変。plugin 経由で解決される第1号。README/engine-plugins.md に明記 |
+| 生成集約 | `gateway/server.ts`（旧 `new *Engine()`×4 → configured engine を `resolveEngine().create()` でループ構築。interactive Claude は "claude" キーを差し替え。shutdown は engines Map を回して killAll） | 上流の engine セットアップ変更時に再適用。**interactive Claude 差し替えと headless fallback（`claudeEngine` を interactive に渡す）を維持** |
+| capability 参照化 | `sessions/manager.ts`/`gateway/api.ts`（`processLifetime`=interactive、sync=syncResume）、`sessions/fork.ts`（supportsFork ガード）、`shared/models.ts`（`ENGINE_NAMES`=registry の `BUILTIN_ENGINE_NAMES`） | `=== "claude"` を capability に置換した箇所。上流が名前分岐を復活させたら capability 参照に寄せ直す |
+| config 型を string に開く | `shared/types.ts`（`engines.default`=`EngineName`、各ブロックに `module?`、`[engine:string]` index、`fallbackEngine` に `(string&{})`。`EngineName`/`EngineConfigBlock`/`BuiltinEngineName` 新設） | 既知リテラルの補完は維持しつつ外部エンジン名を許容。runtime schema は無い（YAML cast）ので型だけ |
+| **意図的に残した名前分岐** | rate-limit の**primary**判定（`session.engine === "claude" && strategy==="fallback"` 等）と `oneShotCli.ts` の `buildArgs` per-CLI switch | Claude 特有挙動 / 各 CLI の flag は engine 固有。capability 化しない（理由は engine-plugins.md） |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
-1. `engines/bob.ts` が残っているか
-2. **★エンジン設定選択の3三項に `bob` 分岐があるか**（`manager.ts` / `api.ts` / `context.ts`）← 最優先
+1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
+2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先
+2b. **capability テーブル**（`registry.ts` `CAPABILITIES`）が生きていて、interactive/fork/syncResume 判定が `=== "claude"` に退行していないか
 3. `oneShotCli.ts` / `server.ts` / `types.ts` の bob 配線
 4. `paths.ts` の `~/.openbanto` 既定 + 自動 migration（全面上書きされていないか）
 5. `whatsapp/index.ts` が dynamic import のまま / `package.json` の baileys が optional peer のまま

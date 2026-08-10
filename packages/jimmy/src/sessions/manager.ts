@@ -28,6 +28,7 @@ import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
+import { resolveEngineConfig, engineIsInteractive, engineSupportsSyncResume } from "../engines/registry.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
@@ -94,7 +95,9 @@ export function computeEngineOverrideRevert(session: Session, nowMs: number = Da
     ?? (typeof engineSessions[originalEngine] === "string" ? (engineSessions[originalEngine] as string) : null);
 
   const nextMeta = { ...meta, engineSessions } as Record<string, unknown>;
-  if (originalEngine === "claude" && syncSince && session.engine !== "claude") {
+  // Handing back to the original engine: if it can resume+sync (Claude), stamp
+  // the sync marker so the next turn injects the fallback-window transcript.
+  if (engineSupportsSyncResume(originalEngine) && syncSince && session.engine !== originalEngine) {
     nextMeta["claudeSyncSince"] = syncSince;
   }
   delete (nextMeta as Record<string, unknown>)["engineOverride"];
@@ -425,7 +428,7 @@ export class SessionManager {
         // claude -p, codex, gemini, SSH fallback) is a one-shot process whose
         // background tasks die at turn end (#38).
         processLifetime:
-          session.engine === "claude" &&
+          engineIsInteractive(session.engine) &&
           this.config.engines.claude?.interactive === true &&
           !employee?.sshHost
             ? "persistent"
@@ -433,13 +436,7 @@ export class SessionManager {
         hierarchy,
       });
 
-      const engineConfig = session.engine === "codex"
-        ? this.config.engines.codex
-        : session.engine === "gemini"
-          ? this.config.engines.gemini ?? this.config.engines.claude
-          : session.engine === "bob"
-            ? this.config.engines.bob ?? this.config.engines.claude
-            : this.config.engines.claude;
+      const engineConfig = resolveEngineConfig(this.config, session.engine);
       if (session.engine === "claude") {
         const mcpConfig = resolveMcpServers(this.config.mcp, employee, {
           connector: connector.name,
@@ -463,7 +460,7 @@ export class SessionManager {
       const syncSinceIso = (session.transportMeta as any)?.claudeSyncSince;
       let promptToRun = msg.text;
       const syncSinceMs = typeof syncSinceIso === "string" ? new Date(syncSinceIso).getTime() : NaN;
-      const syncRequested = session.engine === "claude" && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
+      const syncRequested = engineSupportsSyncResume(session.engine) && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
       if (syncRequested) {
         const sinceMessages = getMessages(session.id)
           .filter((m) => (m.role === "user" || m.role === "assistant") && m.timestamp >= syncSinceMs)

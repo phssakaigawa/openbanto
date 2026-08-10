@@ -12,6 +12,7 @@ import {
   AGENTS_SKILLS_DIR,
 } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
+import { resolveEngineConfig } from "../engines/registry.js";
 import {
   compareSemver,
   getPackageVersion,
@@ -230,7 +231,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
 
   const config = loadConfig();
   const defaultEngine = config.engines.default ?? "claude";
-  const engineConfig = config.engines[defaultEngine] ?? config.engines.claude;
+  const engineConfig = resolveEngineConfig(config, defaultEngine);
 
   try {
     const prompt = [
@@ -245,10 +246,11 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
       `Clean up the migrations/ directory when done.`,
     ].join("\n");
 
+    const engineBin = engineConfig.bin ?? defaultEngine;
     const args = buildMigrateArgs(defaultEngine, prompt);
-    console.log(`${DIM}エンジン: ${defaultEngine} (${engineConfig.bin})${RESET}\n`);
+    console.log(`${DIM}エンジン: ${defaultEngine} (${engineBin})${RESET}\n`);
 
-    execFileSync(engineConfig.bin, args, {
+    execFileSync(engineBin, args, {
       stdio: "inherit",
       cwd: JINN_HOME,
     });

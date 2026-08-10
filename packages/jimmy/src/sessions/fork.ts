@@ -12,6 +12,7 @@ import path from "node:path";
 import os from "node:os";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../shared/logger.js";
+import { engineSupportsFork } from "../engines/registry.js";
 
 export interface ForkResult {
   engineSessionId: string;
@@ -129,6 +130,9 @@ export function forkGeminiSession(engineSessionId: string): ForkResult {
  * Fork an engine session based on engine type.
  */
 export function forkEngineSession(engine: string, engineSessionId: string, cwd: string): ForkResult {
+  if (!engineSupportsFork(engine)) {
+    throw new Error(`Unsupported engine for fork: ${engine}`);
+  }
   switch (engine) {
     case "claude":
       return forkClaudeSession(engineSessionId, cwd);
