@@ -6,6 +6,7 @@ import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { scanOrg } from "../gateway/org.js";
 import { buildServiceRegistry } from "../gateway/services.js";
 import { findJobsNeedingAttention } from "../jobs/state.js";
+import { resolveEngineConfig } from "../engines/registry.js";
 
 /**
  * Token budget strategy:
@@ -891,13 +892,7 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig): string 
  */
 function buildDelegationProtocol(gatewayUrl: string, _portalName: string, config?: JinnConfig): string {
   const defaultEngine = config?.engines.default || "claude";
-  const engineConfig = defaultEngine === "codex"
-    ? config?.engines.codex
-    : defaultEngine === "gemini"
-      ? config?.engines.gemini ?? config?.engines.claude
-      : defaultEngine === "bob"
-        ? config?.engines.bob ?? config?.engines.claude
-        : config?.engines.claude;
+  const engineConfig = config ? resolveEngineConfig(config, defaultEngine) : undefined;
   const childOverride = engineConfig?.childEffortOverride;
 
   const effortOverrideNote = childOverride

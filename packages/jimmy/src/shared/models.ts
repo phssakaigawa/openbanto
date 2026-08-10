@@ -6,6 +6,7 @@ import type {
   EffortMechanism,
   EngineModelsConfig,
 } from "./types.js";
+import { BUILTIN_ENGINE_NAMES } from "../engines/registry.js";
 
 /**
  * Model + capability registry — the single source of truth for which engines and
@@ -15,9 +16,10 @@ import type {
  * existing configs keep working. Adding a NEW model is a config edit, no code change.
  */
 
-/** Engines registered in this build (mirrors server.ts engine map). */
-const ENGINE_NAMES = ["bob", "claude", "codex", "gemini"] as const;
-type EngineName = (typeof ENGINE_NAMES)[number];
+/** Engines registered in this build — sourced from the engine registry's
+ *  built-in list so there is one source of truth (was a duplicated literal). */
+const ENGINE_NAMES = BUILTIN_ENGINE_NAMES;
+type EngineName = (typeof BUILTIN_ENGINE_NAMES)[number];
 
 const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
   bob: "none",

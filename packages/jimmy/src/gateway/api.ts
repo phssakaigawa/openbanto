@@ -47,6 +47,7 @@ import { handleHookPost, LOOPBACK as HOOK_LOOPBACK } from "./hook-endpoint.js";
 import { resolveEffort } from "../shared/effort.js";
 import { explicitThread } from "../shared/threading.js";
 import { effortLevelsForModel, invalidateModelRegistry } from "../shared/models.js";
+import { resolveEngineConfig, engineIsInteractive, engineSupportsSyncResume } from "../engines/registry.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { loadJobs, saveJobs } from "../cron/jobs.js";
@@ -176,7 +177,7 @@ function maybeRevertEngineOverride(session: Session): Session {
     ?? (typeof engineSessions[originalEngine] === "string" ? (engineSessions[originalEngine] as string) : null);
 
   const nextMeta = { ...meta, engineSessions } as Record<string, unknown>;
-  if (originalEngine === "claude" && syncSince && session.engine !== "claude") {
+  if (engineSupportsSyncResume(originalEngine) && syncSince && session.engine !== originalEngine) {
     nextMeta["claudeSyncSince"] = syncSince;
   }
   delete (nextMeta as Record<string, unknown>)["engineOverride"];
@@ -2358,7 +2359,7 @@ async function runWebSession(
       // Interactive PTY survives across turns; everything else is a one-shot
       // process whose background tasks die at turn end (#38).
       processLifetime:
-        currentSession.engine === "claude" &&
+        engineIsInteractive(currentSession.engine) &&
         config.engines.claude?.interactive === true &&
         !employee?.sshHost
           ? "persistent"
@@ -2366,13 +2367,7 @@ async function runWebSession(
       hierarchy: orgHierarchy,
     });
 
-    const engineConfig = currentSession.engine === "codex"
-      ? config.engines.codex
-      : currentSession.engine === "gemini"
-        ? config.engines.gemini ?? config.engines.claude
-        : currentSession.engine === "bob"
-          ? config.engines.bob ?? config.engines.claude
-          : config.engines.claude;
+    const engineConfig = resolveEngineConfig(config, currentSession.engine);
     const effortLevel = resolveEffort(
       engineConfig,
       currentSession,
@@ -2390,7 +2385,7 @@ async function runWebSession(
 
     const syncSinceIso = (currentSession.transportMeta as any)?.claudeSyncSince;
     const syncSinceMs = typeof syncSinceIso === "string" ? new Date(syncSinceIso).getTime() : NaN;
-    const syncRequested = currentSession.engine === "claude" && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
+    const syncRequested = engineSupportsSyncResume(currentSession.engine) && typeof syncSinceIso === "string" && Number.isFinite(syncSinceMs);
     const promptToRun = syncRequested
       ? (() => {
         const sinceMessages = getMessages(currentSession.id)

@@ -6,17 +6,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { JinnConfig, Connector, Employee } from "../shared/types.js";
+import type { JinnConfig, Connector, Employee, InterruptibleEngine, EngineConfigBlock } from "../shared/types.js";
 import { loadConfig } from "../shared/config.js";
 import { invalidateModelRegistry } from "../shared/models.js";
 import { configureLogger, logger } from "../shared/logger.js";
 import { initDb, recoverStaleSessions, recoverStaleQueueItems, getInterruptedSessions, listSessions, updateSession, getSession } from "../sessions/registry.js";
 import { SessionManager, type RouteOptions } from "../sessions/manager.js";
-import { ClaudeEngine } from "../engines/claude.js";
-import { CodexEngine } from "../engines/codex.js";
-import { GeminiEngine } from "../engines/gemini.js";
-import { BobEngine } from "../engines/bob.js";
+import type { ClaudeEngine } from "../engines/claude.js";
 import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
+import { resolveEngine, BUILTIN_ENGINE_NAMES, type EngineContext } from "../engines/registry.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { attachPtyWebSocket } from "./pty-ws.js";
@@ -163,11 +161,34 @@ export async function startGateway(
     logger.info(`Recovered ${recoveredQueue} in-flight queue item(s) from previous run — reset to pending`);
   }
 
-  // Set up engines
-  const claudeEngine = new ClaudeEngine();
-  const codexEngine = new CodexEngine();
-  const geminiEngine = new GeminiEngine();
-  const bobEngine = new BobEngine();
+  // Set up engines. Engines are pluggable (engines/registry.ts): the built-ins
+  // (claude/codex/gemini/bob) resolve through the SAME registry as external
+  // engine plugins, and each is lazily constructed via its plugin's create().
+  // This replaces the old hand-written `new ClaudeEngine()` / … block; the map
+  // ends up with exactly the same engine group as before, plus any external
+  // engine declared with `engines.<name>.module`.
+  const engineCtx: EngineContext = { logger, config };
+
+  // Resolve the set of engine names to build: every built-in, plus any external
+  // engine block in config that carries a `module` specifier.
+  const engineNames = new Set<string>(BUILTIN_ENGINE_NAMES);
+  for (const [name, block] of Object.entries(config.engines ?? {})) {
+    if (name === "default") continue;
+    if (block && typeof block === "object" && typeof (block as { module?: unknown }).module === "string") {
+      engineNames.add(name);
+    }
+  }
+
+  const engines = new Map<string, InterruptibleEngine>();
+  for (const name of engineNames) {
+    const block = (config.engines as unknown as Record<string, EngineConfigBlock | undefined>)[name];
+    const plugin = await resolveEngine(name, block?.module);
+    engines.set(name, await plugin.create((block ?? {}) as Record<string, unknown>, engineCtx));
+  }
+  // The headless Claude engine is the SSH fallback for the interactive PTY engine
+  // (the local PTY can't run over SSH). The registry's claude factory builds the
+  // headless engine, so pull it back out here.
+  const claudeEngine = engines.get("claude") as ClaudeEngine;
 
   // Interactive Claude (PTY) engine — opt-in via config.engines.claude.interactive.
   // When enabled it REPLACES the headless `claude -p` engine under the "claude" key,
@@ -213,11 +234,10 @@ export async function startGateway(
     logger.info("Interactive Claude (PTY) engine enabled — Claude work turns run via PTY (Max-subsidized cc_entrypoint=cli)");
   }
 
-  const engines = new Map<string, InstanceType<typeof ClaudeEngine> | InstanceType<typeof CodexEngine> | InstanceType<typeof GeminiEngine> | InstanceType<typeof BobEngine> | InteractiveClaudeEngine>();
-  engines.set("claude", interactiveClaudeEngine ?? claudeEngine);
-  engines.set("codex", codexEngine);
-  engines.set("gemini", geminiEngine);
-  engines.set("bob", bobEngine);
+  // When interactive Claude is enabled it REPLACES the headless engine under the
+  // "claude" key, so all engine-config / fallback / rate-limit logic keys on
+  // "claude" unchanged (capabilities.interactive on "claude" is already true).
+  if (interactiveClaudeEngine) engines.set("claude", interactiveClaudeEngine);
 
   // PTY-capable engines keyed by engine name — the /ws/pty/:sessionId handler
   // routes by session.engine so the live xterm CLI view attaches to the right one.
@@ -1138,15 +1158,16 @@ export async function startGateway(
     // is active, interactiveClaudeEngine.killAll() also kills its headless fallback
     // (the same claudeEngine), so call only one to avoid a redundant double-kill.
     if (interactiveClaudeEngine) {
-      interactiveClaudeEngine.killAll();
+      // interactiveClaudeEngine.killAll() also kills its headless Claude fallback.
       claudeLifecycle?.dispose();
       try { stopStatusReconciler(); } catch { /* best effort */ }
       try { hookRegistry?.dispose(); } catch { /* best effort */ }
       try { fs.rmSync(GATEWAY_INFO_FILE, { force: true }); } catch { /* best effort */ }
-    } else {
-      claudeEngine.killAll();
     }
-    codexEngine.killAll();
+    // Tear down every engine in the map (claude/codex/gemini/bob + externals).
+    for (const engine of engines.values()) {
+      try { engine.killAll(); } catch { /* best effort */ }
+    }
 
     // Stop cron scheduler
     stopScheduler();

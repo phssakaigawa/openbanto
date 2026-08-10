@@ -546,16 +546,41 @@ export interface EngineModelsConfig {
 /** `models:` block keyed by engine name (claude | codex | gemini). */
 export type ModelsConfig = Record<string, EngineModelsConfig>;
 
+/** Known built-in engine names. Kept as a literal union for ergonomics/
+ *  completion; `EngineName` widens it to any string so external engine plugins
+ *  (resolved via `engines.<name>.module`) are also valid names. */
+export type BuiltinEngineName = "claude" | "codex" | "gemini" | "bob";
+// The `& {}` trick preserves literal autocompletion for the known names while
+// still accepting an arbitrary external engine name.
+export type EngineName = BuiltinEngineName | (string & {});
+
+/** Shape of an `engines.<name>` config block (built-in or external plugin). */
+export interface EngineConfigBlock {
+  bin?: string;
+  model?: string;
+  effortLevel?: string;
+  childEffortOverride?: string;
+  /** External engine plugin package specifier. Omit for built-ins. */
+  module?: string;
+  /** Engine-specific extra keys (e.g. interactive/maxLivePtys for claude). */
+  [key: string]: unknown;
+}
+
 export interface JinnConfig {
   jinn?: { version?: string };
   gateway: { port: number; host: string; streaming?: boolean };
   engines: {
-    default: "claude" | "codex" | "gemini" | "bob";
+    /** Default engine for new sessions. Known built-ins are offered for
+     *  completion; any string is accepted so an external engine plugin
+     *  (resolved via `engines.<name>.module`) can be the default too. */
+    default: EngineName;
     claude: {
       bin: string;
       model: string;
       effortLevel?: string;
       childEffortOverride?: string;
+      /** External engine plugin package specifier. Omit for built-ins. */
+      module?: string;
       /** Opt-in: run Claude as an interactive PTY (cc_entrypoint=cli → Max-subscription
        *  billing) instead of headless `claude -p`. Replaces the engine under the "claude"
        *  key when true. Default false (headless `-p`). */
@@ -568,11 +593,15 @@ export interface JinnConfig {
        *  legitimately occupy one turn (e.g. the seminar-demo generator). */
       interactiveTurnTimeoutMs?: number;
     };
-    codex: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
-    gemini?: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
+    codex: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string; module?: string };
+    gemini?: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string; module?: string };
     /** IBM Bob Shell engine (`bob run`). Model is bound to the team/API key, so
      *  `model` is optional and unused by the engine. Auth via BOB_API_KEY env. */
-    bob?: { bin: string; model?: string; effortLevel?: string; childEffortOverride?: string };
+    bob?: { bin: string; model?: string; effortLevel?: string; childEffortOverride?: string; module?: string };
+    /** External engine plugins, keyed by engine name. Each carries at least a
+     *  `module` specifier the registry dynamic-imports; other keys are
+     *  engine-specific. Built-in keys above take precedence. */
+    [engine: string]: EngineConfigBlock | EngineName | undefined;
   };
   /** Optional model/capability registry override. Absent → synthesized from
    *  `engines.<name>.model`. See shared/models.ts. */
@@ -595,7 +624,7 @@ export interface JinnConfig {
     /** What to do when Claude hits a usage/rate limit. Default: "fallback" */
     rateLimitStrategy?: "wait" | "fallback";
     /** Engine to use when rateLimitStrategy="fallback". Default: "codex" */
-    fallbackEngine?: "codex" | "bob";
+    fallbackEngine?: "codex" | "bob" | (string & {});
     /** Backoff delays (ms) between automatic retries after a transient Anthropic
      *  server error (5xx/529) ended a turn. One retry per entry, resuming the
      *  same engine session with a continuation prompt. Default: [30s, 120s, 300s].
