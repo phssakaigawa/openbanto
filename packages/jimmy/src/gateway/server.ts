@@ -15,6 +15,7 @@ import { SessionManager, type RouteOptions } from "../sessions/manager.js";
 import type { ClaudeEngine } from "../engines/claude.js";
 import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 import { resolveEngine, BUILTIN_ENGINE_NAMES, type EngineContext } from "../engines/registry.js";
+import { resolveGuardrail } from "../guardrails/registry.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { attachPtyWebSocket } from "./pty-ws.js";
@@ -260,8 +261,20 @@ export async function startGateway(
     connectorNames.push("whatsapp");
   }
 
+  // Guardrail — pluggable per-turn permission / approval / audit policy
+  // (guardrails/registry.ts), resolved through the SAME loader as an external
+  // policy pack. With no config.guardrails.module the built-in no-op "allow-all"
+  // guardrail is installed (opt-in), so behaviour is unchanged unless a policy
+  // pack is configured. Built once and injected into the SessionManager, mirroring
+  // how the engines Map is injected.
+  const guardrailPlugin = await resolveGuardrail(config.guardrails?.module);
+  const guardrail = await guardrailPlugin.create(config.guardrails?.config ?? {}, { logger, config });
+  if (config.guardrails?.module) {
+    logger.info(`Guardrail plugin "${guardrailPlugin.name}" loaded from module "${config.guardrails.module}"`);
+  }
+
   // Session manager
-  const sessionManager = new SessionManager(config, engines, connectorNames);
+  const sessionManager = new SessionManager(config, engines, connectorNames, guardrail);
 
   // Orphan hooks = engine activity AFTER a turn settled (background sub-agents /
   // tasks still running in the PTY). Any orphan event keeps the PTY alive; a

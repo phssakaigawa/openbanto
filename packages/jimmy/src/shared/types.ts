@@ -645,6 +645,14 @@ export interface JinnConfig {
     channel?: string;    // Discord channel ID for admin notifications
   };
   portal?: PortalConfig;
+  /** Optional guardrail policy pack. `module` is an external plugin specifier
+   *  the registry dynamic-imports (omit → built-in no-op "allow-all"); `config`
+   *  is the policy-specific block passed to the plugin's create(). See
+   *  guardrails/registry.ts and docs/design/guardrails-hooks.md. */
+  guardrails?: {
+    module?: string;
+    config?: Record<string, unknown>;
+  };
   context?: {
     /** Max characters for the built system prompt. Defaults to 100000. */
     maxChars?: number;

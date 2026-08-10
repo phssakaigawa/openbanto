@@ -29,6 +29,7 @@ import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
 import { resolveEngineConfig, engineIsInteractive, engineSupportsSyncResume } from "../engines/registry.js";
+import type { Guardrail, GuardrailContext } from "../guardrails/registry.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
@@ -42,6 +43,17 @@ export interface RouteOptions {
   engine?: string;
   model?: string;
   title?: string;
+}
+
+/** A turn parked by a guardrail `require_approval`. The queued task is blocked
+ *  (queue.pauseQueue) and waits on `gate`; resolveApproval settles the gate. */
+interface PendingApproval {
+  connector: Connector;
+  target: Target;
+  approvers?: string[];
+  /** Resolve with true (approved → resume) or false (rejected → abort). */
+  resolve: (approved: boolean, opts?: { by?: string; reason?: string }) => void;
+  gate: Promise<{ approved: boolean; by?: string; reason?: string }>;
 }
 
 /**
@@ -148,15 +160,27 @@ export class SessionManager {
   private connectorNames: string[];
   private queue = new SessionQueue();
   private connectorProvider: () => Map<string, Connector> = () => new Map();
+  private guardrail: Guardrail;
+  /** Turns parked by a guardrail `require_approval`, keyed by sessionKey. The
+   *  queue is paused (queue.pauseQueue) while a request is pending; resolveApproval
+   *  resumes (approve) or fails it (reject). */
+  private pendingApprovals = new Map<string, PendingApproval>();
 
   constructor(
     config: JinnConfig,
     engines: Map<string, Engine>,
     connectorNames: string[] = [],
+    guardrail?: Guardrail,
   ) {
     this.config = config;
     this.engines = engines;
     this.connectorNames = connectorNames;
+    // Default to allow-all so callers that don't inject a guardrail (tests,
+    // older wiring) keep the historic behaviour.
+    this.guardrail = guardrail ?? {
+      beforeTurn: () => ({ action: "allow" }),
+      afterTurn: () => {},
+    };
   }
 
   setConnectorProvider(provider: () => Map<string, Connector>): void {
@@ -501,6 +525,70 @@ export class SessionManager {
             : "";
           promptToRun = `[Speaker: ${safeName}${tag}]\n${promptToRun}`;
         }
+      }
+
+      // Guardrail — beforeTurn hook. Sits beside the budget check, before
+      // engine.run(). allow → continue; deny → reply the reason + end the turn
+      // (audit still runs); require_approval → park the queue and wait on a human
+      // decision (see resolveApproval). Guardrails are core (guardrails/registry.ts).
+      const guardrailCtx: GuardrailContext = {
+        sessionKey: msg.sessionKey,
+        connector: connector.name,
+        channel: target.channel,
+        userId: msg.userId,
+        userName: msg.user,
+        employee: session.employee ?? undefined,
+        engine: session.engine,
+        text: msg.text,
+        // Declared toolbelt = MCP servers this turn may use. Resolved the same way
+        // the engine's mcpConfig is (best-effort; empty on error).
+        toolbelt: (() => {
+          try {
+            return Object.keys(
+              resolveMcpServers(this.config.mcp, employee, {
+                connector: connector.name,
+                channel: target.channel,
+                thread: target.thread || target.messageTs,
+              }).mcpServers,
+            );
+          } catch {
+            return [];
+          }
+        })(),
+      };
+      const decision = await this.guardrail.beforeTurn(guardrailCtx);
+      if (decision.action === "deny") {
+        logger.warn(`Session ${session.id} denied by guardrail: ${decision.reason}`);
+        updateSession(session.id, {
+          status: "idle",
+          lastActivity: new Date().toISOString(),
+        });
+        if (decorateMessages && connector.setTypingStatus) {
+          await connector.setTypingStatus(target.channel, threadTs, "").catch(() => {});
+        }
+        await connector.replyMessage(target, `⛔ ${decision.reason}`).catch(() => {});
+        if (decorateMessages && capabilities.reactions) {
+          await connector.removeReaction(target, "eyes").catch(() => {});
+        }
+        await Promise.resolve(
+          this.guardrail.afterTurn(guardrailCtx, { ok: false, error: `denied: ${decision.reason}` }),
+        ).catch(() => {});
+        return;
+      }
+      if (decision.action === "require_approval") {
+        const approved = await this.parkForApproval(session, guardrailCtx, connector, target, decision, threadTs, decorateMessages);
+        if (!approved) {
+          // Rejected → the turn is aborted (reply already sent by resolveApproval).
+          updateSession(session.id, { status: "idle", lastActivity: new Date().toISOString() });
+          if (decorateMessages && capabilities.reactions) {
+            await connector.removeReaction(target, "eyes").catch(() => {});
+          }
+          await Promise.resolve(
+            this.guardrail.afterTurn(guardrailCtx, { ok: false, error: "approval_rejected" }),
+          ).catch(() => {});
+          return;
+        }
+        // Approved → fall through and run the turn normally.
       }
 
       // Budget enforcement — check BEFORE engine.run()
@@ -1092,6 +1180,21 @@ export class SessionManager {
         `Session ${session.id} completed in ${result.durationMs ?? 0}ms` +
         (result.cost ? ` ($${result.cost.toFixed(4)})` : ""),
       );
+
+      // Guardrail — afterTurn hook (main path). Structured audit record of the
+      // turn. Fire-and-forget: it must never throw into the turn. Fallback/retry
+      // sub-paths (rate-limit switch, dead-session retry) settle their own result
+      // above; this covers the primary engine.run() outcome.
+      await Promise.resolve(
+        this.guardrail.afterTurn(guardrailCtx, {
+          ok: !wasInterrupted && !result.error,
+          cost: result.cost,
+          tokens: typeof result.contextTokens === "number" ? result.contextTokens : undefined,
+          error: wasInterrupted ? undefined : (result.error ?? undefined),
+        }),
+      ).catch((err) => {
+        logger.warn(`Guardrail afterTurn threw for ${session.id}: ${err instanceof Error ? err.message : err}`);
+      });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error(`Session ${session.id} error: ${errMsg}`);
@@ -1128,6 +1231,98 @@ export class SessionManager {
 
       if (mcpConfigPath) cleanupMcpConfigFile(session.id);
     }
+  }
+
+  /**
+   * Park a turn awaiting human approval (guardrail `require_approval`). Reuses the
+   * existing per-session queue pause (queue.pauseQueue) so the in-flight task
+   * blocks — but here the task is already running (it holds the queue slot), so we
+   * pause the queue to hold FOLLOW-UP messages and then await a decision gate that
+   * `resolveApproval(sessionKey, approved)` settles. Returns true if approved.
+   *
+   * The approval UX (Slack buttons, LINE WORKS quick-replies, …) is the
+   * connector/extension's responsibility — the core only posts a minimal text
+   * notice and exposes resolveApproval() for the extension to call.
+   */
+  private async parkForApproval(
+    session: Session,
+    ctx: GuardrailContext,
+    connector: Connector,
+    target: Target,
+    decision: { action: "require_approval"; approvers?: string[]; reason?: string },
+    threadTs: string | undefined,
+    decorateMessages: boolean,
+  ): Promise<boolean> {
+    // Hold any queued follow-up messages for this session while approval is pending.
+    this.queue.pauseQueue(session.sessionKey);
+    updateSession(session.id, { status: "waiting", lastActivity: new Date().toISOString() });
+
+    let resolveGate!: (v: { approved: boolean; by?: string; reason?: string }) => void;
+    const gate = new Promise<{ approved: boolean; by?: string; reason?: string }>((res) => {
+      resolveGate = res;
+    });
+    const pending: PendingApproval = {
+      connector,
+      target,
+      approvers: decision.approvers,
+      gate,
+      resolve: (approved, opts) => resolveGate({ approved, by: opts?.by, reason: opts?.reason }),
+    };
+    // One pending approval per session; a new one supersedes (rejects) the old.
+    const existing = this.pendingApprovals.get(session.sessionKey);
+    if (existing) existing.resolve(false, { reason: "superseded" });
+    this.pendingApprovals.set(session.sessionKey, pending);
+
+    const approverNote = decision.approvers?.length ? ` (approvers: ${decision.approvers.join(", ")})` : "";
+    await connector.replyMessage(
+      target,
+      `⏳ この操作には承認が必要です${decision.reason ? `: ${decision.reason}` : ""}${approverNote}`,
+    ).catch(() => {});
+
+    let outcome: { approved: boolean; by?: string; reason?: string };
+    try {
+      outcome = await gate;
+    } finally {
+      this.pendingApprovals.delete(session.sessionKey);
+      this.queue.resumeQueue(session.sessionKey);
+    }
+
+    if (decorateMessages && connector.setTypingStatus) {
+      // Refresh typing indicator now that the wait is over and we're about to run.
+      await connector.setTypingStatus(target.channel, threadTs, outcome.approved ? "入力中..." : "").catch(() => {});
+    }
+
+    if (!outcome.approved) {
+      await connector.replyMessage(
+        target,
+        `⛔ 承認されませんでした${outcome.reason ? `: ${outcome.reason}` : ""}`,
+      ).catch(() => {});
+      return false;
+    }
+    logger.info(`Session ${session.id} approved${outcome.by ? ` by ${outcome.by}` : ""} — resuming turn`);
+    return true;
+  }
+
+  /**
+   * Settle a pending guardrail approval for a session. Called by the extension /
+   * connector layer that owns the approval UI (e.g. a Slack button handler).
+   * approved=true resumes the parked turn; approved=false aborts it with a reason.
+   * Returns true if a pending approval existed and was settled.
+   */
+  resolveApproval(
+    sessionKey: string,
+    approved: boolean,
+    opts?: { by?: string; reason?: string },
+  ): boolean {
+    const pending = this.pendingApprovals.get(sessionKey);
+    if (!pending) return false;
+    pending.resolve(approved, opts);
+    return true;
+  }
+
+  /** True if a guardrail approval is currently pending for this session. */
+  hasPendingApproval(sessionKey: string): boolean {
+    return this.pendingApprovals.has(sessionKey);
   }
 
   async handleCommand(msg: IncomingMessage, connector: Connector): Promise<boolean> {
