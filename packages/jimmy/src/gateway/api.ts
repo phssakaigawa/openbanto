@@ -64,10 +64,12 @@ import {
   installPlugin,
   togglePlugin,
   updatePluginConfig,
+  upsertOpenAiEngine,
   auditPluginAction,
   type InstallRequest,
   type ToggleRequest,
   type ConfigUpdateRequest,
+  type OpenAiEngineRequest,
 } from "./plugins-api.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
@@ -1474,6 +1476,29 @@ Handle this as a priority request from a colleague.`;
             }
           }
         }
+        return json(res, result.body, result.http);
+      }
+
+      // POST /api/plugins/engine-openai — create/update a built-in OpenAI-compatible
+      // engine (impl:"openai"). No pnpm add: the implementation is in-tree, so we
+      // only patch config.engines.<name> and require a restart. apiKey is never
+      // echoed; audit records the name only.
+      if (method === "POST" && pathname === "/api/plugins/engine-openai") {
+        const _parsed = await readJsonBody(req, res);
+        if (!_parsed.ok) return;
+        const body = _parsed.body as OpenAiEngineRequest;
+        const result = upsertOpenAiEngine(body);
+        await auditPluginAction(
+          {
+            who,
+            action: result.body.created ? "engine.openai.create" : "engine.openai.update",
+            pluginType: "engine",
+            name: body?.name,
+            result: result.body.status,
+          },
+          context.auditSink,
+        );
+        if (result.patched) invalidateModelRegistry();
         return json(res, result.body, result.http);
       }
 

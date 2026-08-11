@@ -92,6 +92,54 @@ registry's `BUILTIN_ENGINE_NAMES`.
   The `OneShotEngine` union stays the closed set of one-shot-capable CLI engines
   (== `usableAsOneShot && transport==='cli'`); a generic HTTP one-shot is Phase 3.
 
+## Built-in `impl:"openai"` engine (many named instances of one implementation)
+
+Beyond built-in names and external `module` plugins, a config engine block may
+select a **shared in-tree implementation** with `impl`. Today the only impl is
+`openai` — a generic OpenAI-compatible HTTP engine
+(`packages/jimmy/src/engines/openai.ts` + `openai.plugin.ts`). This lets an
+operator declare **any number of named engines** that all share that one
+implementation, each with its own `baseUrl`/`apiKey`/`model`:
+
+```yaml
+engines:
+  default: bob
+  aidea:  { impl: "openai", baseUrl: "https://aidea-agent.dev.gw.link", apiKey: "…", model: "…" }
+  kannon: { impl: "openai", baseUrl: "https://kannon.dev.gw.link",      apiKey: "…", model: "…" }
+```
+
+Resolution (`resolveEngine(name, block)`), in order:
+1. **built-in name** (bob/claude/codex/gemini) → lazy factory;
+2. **`impl:"openai"` in the block** → the shared `openai` plugin (`IMPL_PLUGINS`
+   in the registry). The engine's `name` is the config key (`aidea`/`kannon`);
+3. **external `module`** → dynamic import.
+
+`gateway/server.ts` enumerates the engine map from the built-ins **plus** any
+config block carrying a `module` or an `impl`, injecting the config key as
+`cfg.name` so each instance reports its own name. Capabilities for an impl engine
+come from `IMPL_CAPABILITIES[impl]` (openai = `transport:"http"`,
+`interactive/supportsFork/syncResume/usableAsFallback/usableAsOneShot: false`,
+`effort:"none"`); `engineCapabilities(name, config)` resolves through it.
+
+The engine:
+- POSTs `${baseUrl}/v1/chat/completions` with `stream:true`, parses the SSE token
+  stream, forwards each `delta.content` as `onStream({type:"text",…})`, and
+  aggregates the final text into `EngineResult.result`;
+- keeps one `AbortController` per Jinn `sessionId` (`kill`=abort, `isAlive`,
+  `killAll`); an abort yields `error:"interrupted"`;
+- maps `usage.prompt_tokens` → `contextTokens` and `usage.cost` → `cost` when the
+  gateway emits them;
+- keeps a small per-`sessionId` in-memory transcript so a resumed turn replays
+  prior context (MVP; lost on restart — `syncResume:false`);
+- **does NOT do tool-calls / MCP yet** — `mcpConfigPath` is ignored (TODO in the
+  source). The goal is a reliable "conversation" engine first.
+
+The `/model` picker surfaces each impl engine's `engines.<name>.model`
+(`shared/models.ts` `addImplEngineEntries`), so `/model` can switch to it.
+
+`apiKey` is a secret: it is never returned by `GET /api/plugins` (the summary
+carries only `openai.hasApiKey`), and the engine never logs or echoes it.
+
 ## Config
 ```yaml
 engines:
@@ -104,7 +152,8 @@ engines:
 ## Phasing
 1. **Registry + capability table + wiring dedup** (no behaviour change) — done.
 2. **External plugin loading** (`module` → dynamic import) — done.
-3. **Reference HTTP engine (aidea)** — TODO. See the申し送り in BANTO-PORT-PLAN.
+3. **Built-in `impl:"openai"` HTTP engine + Web form** — done (this change).
+4. **HTTP one-shot + tool-call/MCP** — TODO. See the申し送り in BANTO-PORT-PLAN.
 
 ## Non-goals
 - Sandboxing plugin code (engines run in-process with the daemon's privileges).

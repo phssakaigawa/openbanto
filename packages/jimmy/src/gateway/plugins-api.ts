@@ -203,6 +203,11 @@ export interface PluginEntry {
   module?: string;
   enabled: boolean;
   hasConfig: boolean;
+  /** For engines that select a shared in-tree impl (impl:"openai"). */
+  impl?: string;
+  /** Non-secret openai engine fields surfaced so the Web edit form can prefill.
+   *  The apiKey is NEVER included — only whether one is set. */
+  openai?: { baseUrl?: string; model?: string; temperature?: number; hasApiKey: boolean };
 }
 
 export interface PluginsSummary {
@@ -217,6 +222,8 @@ export interface PluginsSummary {
 const ENGINE_META_KEYS = new Set([
   "bin", "model", "effortLevel", "childEffortOverride", "module",
   "interactive", "maxLivePtys", "interactiveTurnTimeoutMs",
+  // openai impl block keys
+  "impl", "baseUrl", "apiKey", "headers", "temperature", "name",
 ]);
 
 /** Build the plugin summary from the live config. */
@@ -228,7 +235,8 @@ export function summarizePlugins(config: JinnConfig): PluginsSummary {
     if (name === "default") continue;
     if (!block || typeof block !== "object") continue;
     const module = typeof block.module === "string" ? block.module : undefined;
-    const isBuiltin = (BUILTIN_ENGINE_NAMES as readonly string[]).includes(name) && !module;
+    const impl = typeof block.impl === "string" ? block.impl : undefined;
+    const isBuiltin = (BUILTIN_ENGINE_NAMES as readonly string[]).includes(name) && !module && !impl;
     const hasConfig = Object.keys(block).some((k) => !ENGINE_META_KEYS.has(k));
     engines.push({
       name,
@@ -236,6 +244,18 @@ export function summarizePlugins(config: JinnConfig): PluginsSummary {
       module,
       enabled: name === defaultEngine,
       hasConfig,
+      ...(impl ? { impl } : {}),
+      // Surface non-secret openai fields for the edit form (apiKey masked to a boolean).
+      ...(impl === "openai"
+        ? {
+            openai: {
+              baseUrl: typeof block.baseUrl === "string" ? block.baseUrl : undefined,
+              model: typeof block.model === "string" ? block.model : undefined,
+              temperature: typeof block.temperature === "number" ? block.temperature : undefined,
+              hasApiKey: typeof block.apiKey === "string" && block.apiKey.length > 0,
+            },
+          }
+        : {}),
     });
   }
 
@@ -381,6 +401,94 @@ export async function installPlugin(
     body: { status: "installed", needsRestart },
     patched: true,
   };
+}
+
+// ---- OpenAI-compatible engine (built-in impl, no pnpm add) -----------------
+
+export interface OpenAiEngineRequest {
+  /** Config engine key (aidea/kannon/…). [a-z0-9-]+ */
+  name: string;
+  baseUrl: string;
+  /** Omit / empty on an EDIT to keep the stored key unchanged. Required on create. */
+  apiKey?: string;
+  model?: string;
+  temperature?: number;
+  headers?: Record<string, string>;
+}
+
+/** Engine identifier: lowercase, digits, hyphen. Distinct from PLUGIN_NAME_RE
+ *  (which allows uppercase/dots) — engine keys are used as YAML keys and model
+ *  ids, so keep them tight. */
+const OPENAI_ENGINE_NAME_RE = /^[a-z0-9-]+$/;
+
+/** Accept only http(s) URLs for the OpenAI-compatible base. */
+function isHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create or update an OpenAI-compatible engine. Unlike installPlugin this does
+ * NOT run `pnpm add` — the implementation is in-tree (impl:"openai"). It writes
+ * `engines.<name> = { impl:"openai", baseUrl, apiKey, model, … }` using the same
+ * merge-from-disk config writer, so an EDIT preserves the existing apiKey when
+ * the caller omits it. Always needsRestart (engine map is built at boot).
+ *
+ * Returns `patched:false` on validation error so the router skips the audit's
+ * success path; the apiKey is NEVER echoed back in the response.
+ */
+export function upsertOpenAiEngine(
+  reqBody: OpenAiEngineRequest,
+): { http: number; body: { status: string; message?: string; needsRestart?: boolean; created?: boolean }; patched: boolean } {
+  const name = typeof reqBody?.name === "string" ? reqBody.name.trim() : "";
+  if (!OPENAI_ENGINE_NAME_RE.test(name)) {
+    return { http: 400, body: { status: "error", message: "name must match [a-z0-9-]+" }, patched: false };
+  }
+  // Refuse to shadow a built-in engine key.
+  if ((BUILTIN_ENGINE_NAMES as readonly string[]).includes(name) || name === "default") {
+    return { http: 400, body: { status: "error", message: `"${name}" is a reserved engine name` }, patched: false };
+  }
+  if (!isHttpUrl(reqBody?.baseUrl)) {
+    return { http: 400, body: { status: "error", message: "baseUrl must be an http(s) URL" }, patched: false };
+  }
+  if (reqBody.temperature !== undefined && typeof reqBody.temperature !== "number") {
+    return { http: 400, body: { status: "error", message: "temperature must be a number" }, patched: false };
+  }
+
+  const cfg = readConfigFromDisk();
+  cfg.engines = cfg.engines || {};
+  const existing =
+    cfg.engines[name] && typeof cfg.engines[name] === "object" ? (cfg.engines[name] as Record<string, any>) : undefined;
+  const created = !existing;
+
+  // On create, an apiKey is mandatory. On edit, an empty/omitted apiKey keeps
+  // the stored one; a provided one replaces it.
+  const providedKey = typeof reqBody.apiKey === "string" ? reqBody.apiKey.trim() : "";
+  if (created && !providedKey) {
+    return { http: 400, body: { status: "error", message: "apiKey is required to create an engine" }, patched: false };
+  }
+
+  const block: Record<string, any> = { ...(existing ?? {}) };
+  block.impl = "openai";
+  block.baseUrl = reqBody.baseUrl.trim();
+  if (providedKey) block.apiKey = providedKey; // else: keep existing key
+  if (typeof reqBody.model === "string" && reqBody.model.trim()) block.model = reqBody.model.trim();
+  if (typeof reqBody.temperature === "number") block.temperature = reqBody.temperature;
+  else delete block.temperature;
+  if (reqBody.headers && typeof reqBody.headers === "object" && !Array.isArray(reqBody.headers)) {
+    block.headers = reqBody.headers;
+  }
+  // Drop any stale external-module specifier — this is an impl engine now.
+  delete block.module;
+
+  cfg.engines[name] = block;
+  writeConfigToDisk(cfg);
+  return { http: 200, body: { status: "ok", needsRestart: true, created }, patched: true };
 }
 
 // ---- Toggle ----------------------------------------------------------------

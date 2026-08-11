@@ -562,6 +562,19 @@ export interface EngineConfigBlock {
   childEffortOverride?: string;
   /** External engine plugin package specifier. Omit for built-ins. */
   module?: string;
+  /** Shared in-tree implementation selector. `impl: "openai"` resolves the
+   *  built-in OpenAI-compatible HTTP engine so many named engines can share one
+   *  implementation, each with its own baseUrl/apiKey/model. */
+  impl?: "openai";
+  /** OpenAI-compatible endpoint base (used when impl === "openai"). */
+  baseUrl?: string;
+  /** API key sent as `Authorization: Bearer` (impl === "openai"). SECRET —
+   *  masked in API responses. */
+  apiKey?: string;
+  /** Extra request headers (impl === "openai"). */
+  headers?: Record<string, string>;
+  /** Sampling temperature (impl === "openai"). */
+  temperature?: number;
   /** Engine-specific extra keys (e.g. interactive/maxLivePtys for claude). */
   [key: string]: unknown;
 }

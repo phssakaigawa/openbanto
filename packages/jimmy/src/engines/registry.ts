@@ -90,6 +90,46 @@ const BUILTINS: Record<string, () => Promise<EnginePlugin>> = {
   }),
 };
 
+// ---- `impl`-selected plugins ------------------------------------------------
+// A config engine block may name a shared IMPLEMENTATION rather than being a
+// built-in name or an external module: `engines.aidea = { impl: "openai", … }`.
+// This is the third resolution path (see resolveEngine). It lets an operator
+// declare MANY named engines (aidea, kannon, …) that all share one in-tree
+// implementation, each with its own baseUrl/apiKey/model. The lazy factories
+// mirror BUILTINS; their capability tables live in IMPL_CAPABILITIES.
+
+const IMPL_PLUGINS: Record<string, () => Promise<EnginePlugin>> = {
+  openai: async () => (await import("./openai.plugin.js")).default,
+};
+
+/** Capability tables for `impl`-selected engines, keyed by impl name (not by the
+ *  config engine name). engineCapabilities()/CAPABILITIES resolve through this
+ *  when a name isn't a built-in but its block declares an impl. */
+export const IMPL_CAPABILITIES: Record<string, EngineCapabilities> = {
+  openai: {
+    transport: "http",
+    interactive: false,
+    supportsFork: false,
+    syncResume: false,
+    usableAsFallback: false,
+    usableAsOneShot: false,
+    models: [],
+    effort: "none",
+  },
+};
+
+/** Known impl names (config `engines.<name>.impl` values). */
+export const ENGINE_IMPL_NAMES = ["openai"] as const;
+
+/** True when a config engine block selects a shared impl (e.g. `impl: "openai"`). */
+export function engineImplOf(block: unknown): string | undefined {
+  if (block && typeof block === "object") {
+    const impl = (block as { impl?: unknown }).impl;
+    if (typeof impl === "string" && impl in IMPL_PLUGINS) return impl;
+  }
+  return undefined;
+}
+
 /**
  * Static capability table for the built-in engines. Kept separate from the lazy
  * factories so the core can answer capability questions (interactive? fork?
@@ -146,11 +186,32 @@ export const CAPABILITIES: Record<string, EngineCapabilities> = {
 /** Built-in engine names, in a stable order (mirrors the historic engine map). */
 export const BUILTIN_ENGINE_NAMES = ["bob", "claude", "codex", "gemini"] as const;
 
-/** Resolve a plugin by name. Built-ins are lazy; an external `module` specifier
- *  is dynamic-imported by name (Phase 2). */
-export async function resolveEngine(name: string, module?: string): Promise<EnginePlugin> {
+/**
+ * Resolve a plugin for a config engine name. Three paths, in order:
+ *  1. built-in name (bob/claude/codex/gemini) → lazy factory;
+ *  2. `impl: "openai"` in the block → shared in-tree implementation (many named
+ *     instances of one impl);
+ *  3. external `module` specifier → dynamic import.
+ *
+ * The second arg accepts either the whole `engines.<name>` block (preferred) or,
+ * for backward compatibility, just the `module` string.
+ */
+export async function resolveEngine(
+  name: string,
+  blockOrModule?: string | Record<string, unknown>,
+): Promise<EnginePlugin> {
   const builtin = BUILTINS[name];
   if (builtin) return builtin();
+
+  const block: Record<string, unknown> | undefined =
+    typeof blockOrModule === "string" ? { module: blockOrModule } : blockOrModule;
+  const module = typeof block?.module === "string" ? (block.module as string) : undefined;
+
+  // (2) impl-selected shared implementation (e.g. openai).
+  const impl = engineImplOf(block);
+  if (impl) return IMPL_PLUGINS[impl]();
+
+  // (3) external module plugin.
   if (module) {
     const mod = await import(module).catch(() => {
       throw new Error(
@@ -159,7 +220,7 @@ export async function resolveEngine(name: string, module?: string): Promise<Engi
     });
     return (mod.default ?? mod) as EnginePlugin;
   }
-  throw new Error(`Unknown engine "${name}" and no "module" given.`);
+  throw new Error(`Unknown engine "${name}" and no "impl"/"module" given.`);
 }
 
 export function hasBuiltinEngine(name: string): boolean {
@@ -180,8 +241,17 @@ export function defineEnginePlugin(plugin: EnginePlugin): EnginePlugin {
  * table entry for a built-in, or undefined for an unknown/external engine — call
  * sites treat undefined as "no special capability" (the conservative default).
  */
-export function engineCapabilities(name: string): EngineCapabilities | undefined {
-  return CAPABILITIES[name];
+export function engineCapabilities(name: string, config?: JinnConfig): EngineCapabilities | undefined {
+  const builtin = CAPABILITIES[name];
+  if (builtin) return builtin;
+  // impl-selected engine (e.g. an aidea/kannon block with impl:"openai"): look
+  // up the block in config and return the impl's capability table.
+  if (config) {
+    const block = (config.engines as unknown as Record<string, unknown>)?.[name];
+    const impl = engineImplOf(block);
+    if (impl) return IMPL_CAPABILITIES[impl];
+  }
+  return undefined;
 }
 
 /**
@@ -198,7 +268,16 @@ export function engineCapabilities(name: string): EngineCapabilities | undefined
 export function resolveEngineConfig(
   config: JinnConfig,
   engineName: string,
-): { bin?: string; model?: string; effortLevel?: string; childEffortOverride?: string; module?: string } {
+): {
+  bin?: string;
+  model?: string;
+  effortLevel?: string;
+  childEffortOverride?: string;
+  module?: string;
+  impl?: string;
+  baseUrl?: string;
+  apiKey?: string;
+} {
   const engines = config.engines as unknown as Record<string, any>;
   // The engine's own block if present; otherwise fall back to claude's so the
   // caller always has bin/model/effort defaults (claude is always configured).

@@ -61,6 +61,9 @@ export interface PluginEntry {
   module?: string;
   enabled: boolean;
   hasConfig: boolean;
+  impl?: string;
+  /** Non-secret openai engine fields (apiKey never included — only hasApiKey). */
+  openai?: { baseUrl?: string; model?: string; temperature?: number; hasApiKey: boolean };
 }
 
 export interface PluginsSummary {
@@ -192,6 +195,19 @@ export const api = {
     name: string;
     config: Record<string, unknown>;
   }) => put<{ status: string; needsRestart?: boolean; message?: string }>("/api/plugins/config", data),
+  /** Create/update a built-in OpenAI-compatible engine (impl:"openai"). Omit
+   *  apiKey on an edit to keep the stored key. No pnpm add; needs a restart. */
+  upsertOpenAiEngine: (data: {
+    name: string;
+    baseUrl: string;
+    apiKey?: string;
+    model?: string;
+    temperature?: number;
+  }) =>
+    post<{ status: string; needsRestart?: boolean; message?: string; created?: boolean }>(
+      "/api/plugins/engine-openai",
+      data,
+    ),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),
   getSkill: (name: string) => get<Record<string, unknown>>(`/api/skills/${name}`),
   getConfig: () => get<Record<string, unknown>>("/api/config"),
