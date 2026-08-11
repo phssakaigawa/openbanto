@@ -108,6 +108,21 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 | reload 方針 | — | **connector=即 hot-reload**（`reloadAllConnectors`）/ **engine・guardrail=起動時1回生成のため再起動要**（`needsRestart:true`→UI が再起動を促す）。無停止 hot-swap はスコープ外 |
 | 単体テスト | `gateway/__tests__/plugins-api.test.ts`（`validateModuleSpec` の command injection/ローカルパス/protocol 拒否 + `requirePluginAdmin` gate + `summarizePlugins`） | module バリデーションの回帰検知。上流が execFile/シェル配線を触ったら再確認 |
 
+### J. 汎用 OpenAI 互換エンジン（`impl:"openai"`）＋Web 設定フォーム（OpenBanto 独自）
+`docs/design/http-engine-skeleton.md` の申し送りを**組込み実装**として取り込んだもの。任意名のエンジンを **1 実装（openai）で複数**定義でき（`engines.aidea`/`engines.kannon` …）、各々 baseUrl/apiKey/model を持つ。CLI ではなく HTTP（`/v1/chat/completions` `stream:true`）で会話し、SSE を `onStream` に転送、最終テキストを `EngineResult.result` に集約。**tool-call/MCP はスコープ外**（`mcpConfigPath` 無視・TODO）。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| エンジン実装（新規） | `packages/jimmy/src/engines/openai.ts`（`OpenAiEngine implements InterruptibleEngine` + `parseSse`） | sessionId 毎 `AbortController`（kill=abort/isAlive/killAll、abort→`error:"interrupted"`）。`usage.prompt_tokens`→contextTokens、`usage.cost`→cost。**apiKey をログ/レスポンスに出さない**。resume は sessionId 毎の in-memory transcript（MVP・再起動で消失、`syncResume:false`） |
+| プラグイン（新規） | `packages/jimmy/src/engines/openai.plugin.ts`（`defineEnginePlugin` name="openai"、`create` で baseUrl/apiKey/model 欠如時 throw） | capabilities= `transport:"http"` 他すべて false・`effort:"none"`。create は動的 import で `OpenAiEngine` 生成 |
+| registry（impl 解決） | `engines/registry.ts`（`IMPL_PLUGINS`/`IMPL_CAPABILITIES`/`ENGINE_IMPL_NAMES`/`engineImplOf`、`resolveEngine(name, block)` に **第3経路**＝block.impl、`engineCapabilities(name, config)` が impl 参照、`resolveEngineConfig` 戻り型に impl/baseUrl/apiKey） | **★builtin 名でも module でもない第3経路**。上流が resolveEngine 署名を変えたら block 受理を追随。builtin 名を優先し impl はその後 |
+| engine map 構築 | `gateway/server.ts`（builtin + `module` **または** `impl` を持つ config engine を列挙、`cfg.name`＝config キーを注入） | impl エンジンの `name` は config キー（aidea/kannon）。列挙条件に impl を落とすと生成されない |
+| model picker 配線 | `shared/models.ts`（`addImplEngineEntries`＝`engines.<name>.model` を registry に追加、`buildRegistry`/`synthesizeFromEngineConfig` 双方で呼ぶ） | builtin 以外も /model 切替対象に。上流が registry 構築を作り直したら再配線 |
+| config 型 | `shared/types.ts`（`EngineConfigBlock` に `impl?:"openai"`/`baseUrl?`/`apiKey?`/`headers?`/`temperature?`） | 既存 `module?`/`bin?`/`model?` と併存。`engines` index signature で任意名許容（既存） |
+| gateway API（新規） | `gateway/plugins-api.ts`（`upsertOpenAiEngine`＝**pnpm add しない**・config `engines.<name>` に `{impl:"openai",…}` 書込・`needsRestart:true`）+ `gateway/api.ts` `POST /api/plugins/engine-openai` | **★pnpm add 不要**（組込み実装）。name=`[a-z0-9-]+`・builtin/`default` 予約名拒否、baseUrl=http(s) のみ。**apiKey は再入力時のみ更新・空なら据置**、レスポンスに返さない（summary は `openai.hasApiKey` のみ）。監査は name のみ |
+| WebUI（フォーム） | `packages/web/src/app/plugins/page.tsx`（`OpenAiEngineSection`/`OpenAiEngineForm`）+ `lib/api.ts`（`upsertOpenAiEngine`+`PluginEntry.impl`/`openai`） | 型付き入力（生 JSON でない）: name/baseUrl/apiKey(password)/model/temperature。編集時 apiKey 空欄＝据置。再起動要を明示 |
+| 単体テスト | `engines/__tests__/openai.test.ts`（`parseSse` の分割フレーム/[DONE]/非JSON、run のストリーム集約・usage・**apiKey 非漏洩**・abort→interrupted・killAll） | 実 HTTP は叩かず ReadableStream 模擬。SSE パース＋abort の回帰検知 |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
@@ -120,6 +135,7 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 6. `context.ts` の番頭 identity + 「ご記帳」ONBOARDING
 6b. **★ガードレール hook が turn 実行路から外れていないか**（`sessions/manager.ts` `runSession()` の `beforeTurn`=budget check 隣・`engine.run` 直前 / `afterTurn`=主経路の `engine.run` 復帰後 が残っているか。`gateway/server.ts` が `resolveGuardrail().create()` を SessionManager 第4引数に注入しているか。未設定時に no-op「allow-all」で挙動不変か）
 6c. **★プラグイン管理UIのセキュリティ gate が生きているか**（`gateway/plugins-api.ts` `requirePluginAdmin`＝`manageUi` flag→group 再チェック→loopback fallback / `validateModuleSpec` の npm・git+https 限定＋shell メタ拒否 / `pnpm add` が **execFile（シェル非経由）** のままか。`gateway/api.ts` `/api/plugins/*` 各ルートが gate を通しているか。`PUT /api/config` `KNOWN_KEYS` に `plugins`/`guardrails` が残っているか）
+6d. **★汎用 OpenAI 互換エンジンが生きているか**（`engines/registry.ts` の impl 解決＝`resolveEngine(name, block)` 第3経路・`IMPL_PLUGINS.openai`・`engineImplOf` が残っているか。`gateway/server.ts` の engine map 列挙が `impl` を拾うか。`shared/models.ts` `addImplEngineEntries` で /model picker に出るか。`gateway/plugins-api.ts` `upsertOpenAiEngine` が **pnpm add を叩かず** apiKey を据置更新・非漏洩のままか。`openai.ts` が abort→`interrupted`・apiKey 非ログか）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）
 

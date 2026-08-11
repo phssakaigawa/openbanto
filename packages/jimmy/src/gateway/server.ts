@@ -170,21 +170,28 @@ export async function startGateway(
   // engine declared with `engines.<name>.module`.
   const engineCtx: EngineContext = { logger, config };
 
-  // Resolve the set of engine names to build: every built-in, plus any external
-  // engine block in config that carries a `module` specifier.
+  // Resolve the set of engine names to build: every built-in, plus any config
+  // engine block that carries a `module` specifier OR an `impl` (e.g. named
+  // openai instances aidea/kannon that share the in-tree openai implementation).
   const engineNames = new Set<string>(BUILTIN_ENGINE_NAMES);
   for (const [name, block] of Object.entries(config.engines ?? {})) {
     if (name === "default") continue;
-    if (block && typeof block === "object" && typeof (block as { module?: unknown }).module === "string") {
-      engineNames.add(name);
+    if (block && typeof block === "object") {
+      const b = block as { module?: unknown; impl?: unknown };
+      if (typeof b.module === "string" || typeof b.impl === "string") {
+        engineNames.add(name);
+      }
     }
   }
 
   const engines = new Map<string, InterruptibleEngine>();
   for (const name of engineNames) {
     const block = (config.engines as unknown as Record<string, EngineConfigBlock | undefined>)[name];
-    const plugin = await resolveEngine(name, block?.module);
-    engines.set(name, await plugin.create((block ?? {}) as Record<string, unknown>, engineCtx));
+    const plugin = await resolveEngine(name, block as Record<string, unknown> | undefined);
+    // Pass the engine's config key as `name` so shared-impl instances
+    // (impl:"openai") report their own name in logs/results.
+    const cfg = { ...(block ?? {}), name } as Record<string, unknown>;
+    engines.set(name, await plugin.create(cfg, engineCtx));
   }
   // The headless Claude engine is the SSH fallback for the interactive PTY engine
   // (the local PTY can't run over SSH). The registry's claude factory builds the

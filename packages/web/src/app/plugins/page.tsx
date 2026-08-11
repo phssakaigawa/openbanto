@@ -120,6 +120,7 @@ export default function PluginsPage() {
 
               <TabsContent value="engine">
                 <PluginList type="engine" items={data.engines} onChanged={load} />
+                {data.manageUi && <OpenAiEngineSection engines={data.engines} onChanged={load} />}
               </TabsContent>
               <TabsContent value="connector">
                 <PluginList type="connector" items={data.connectors} onChanged={load} />
@@ -210,6 +211,255 @@ function PluginList({
         </Card>
       ))}
     </div>
+  );
+}
+
+/** Add / edit OpenAI-compatible engines (impl:"openai"). Type-safe inputs (not
+ *  raw JSON). apiKey is write-only: on edit it is left blank and only sent when
+ *  the operator re-enters it (empty → keep stored key). */
+function OpenAiEngineSection({
+  engines,
+  onChanged,
+}: {
+  engines: PluginEntry[];
+  onChanged: () => void;
+}) {
+  const openaiEngines = engines.filter((e) => e.impl === "openai");
+  // `editing` holds the engine being edited, or "new" for the add form, or null.
+  const [editing, setEditing] = useState<PluginEntry | "new" | null>(null);
+
+  return (
+    <div className="mt-[var(--space-6)]">
+      <div className="mb-[var(--space-3)] flex items-center justify-between">
+        <h3 className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+          OpenAI 互換エンジン
+        </h3>
+        {editing === null && (
+          <Button variant="outline" size="sm" onClick={() => setEditing("new")}>
+            OpenAI 互換エンジンを追加
+          </Button>
+        )}
+      </div>
+
+      {openaiEngines.length > 0 && (
+        <div className="mb-[var(--space-3)] flex flex-col gap-[var(--space-2)]">
+          {openaiEngines.map((e) => (
+            <Card key={e.name}>
+              <CardContent className="flex items-center justify-between gap-4 p-[var(--space-4)]">
+                <div className="min-w-0">
+                  <span className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+                    {e.name}
+                  </span>
+                  <p className="mt-1 truncate text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                    {e.openai?.baseUrl}
+                    {e.openai?.model ? ` · ${e.openai.model}` : ""}
+                    {e.openai?.hasApiKey ? " · 🔑 設定済" : " · 🔑 未設定"}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => setEditing(e)}>
+                  編集
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {editing !== null && (
+        <OpenAiEngineForm
+          entry={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            onChanged();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function OpenAiEngineForm({
+  entry,
+  onClose,
+  onSaved,
+}: {
+  entry: PluginEntry | null; // null = create
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = entry !== null;
+  const [name, setName] = useState(entry?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(entry?.openai?.baseUrl ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState(entry?.openai?.model ?? "");
+  const [temperature, setTemperature] = useState(
+    entry?.openai?.temperature !== undefined ? String(entry.openai.temperature) : "",
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<
+    | { kind: "ok"; needsRestart?: boolean }
+    | { kind: "error"; message: string }
+    | null
+  >(null);
+
+  const inputCls =
+    "w-full rounded-[var(--radius-md,12px)] border border-border bg-[var(--bg-secondary)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-body)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]";
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setResult(null);
+
+    const nm = name.trim();
+    if (!/^[a-z0-9-]+$/.test(nm)) {
+      setResult({ kind: "error", message: "名前は [a-z0-9-]+ である必要があります" });
+      return;
+    }
+    if (!/^https?:\/\//.test(baseUrl.trim())) {
+      setResult({ kind: "error", message: "baseUrl は http(s):// である必要があります" });
+      return;
+    }
+    let temp: number | undefined;
+    if (temperature.trim()) {
+      const t = Number(temperature);
+      if (!Number.isFinite(t)) {
+        setResult({ kind: "error", message: "temperature は数値である必要があります" });
+        return;
+      }
+      temp = t;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await api.upsertOpenAiEngine({
+        name: nm,
+        baseUrl: baseUrl.trim(),
+        // Only send apiKey when entered; empty on edit keeps the stored key.
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        ...(model.trim() ? { model: model.trim() } : {}),
+        ...(temp !== undefined ? { temperature: temp } : {}),
+      });
+      if (res.status === "ok") {
+        setResult({ kind: "ok", needsRestart: res.needsRestart });
+        setApiKey("");
+        onSaved();
+      } else {
+        setResult({ kind: "error", message: res.message || "保存に失敗しました" });
+      }
+    } catch (err) {
+      setResult({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-[var(--space-5)]">
+        <div className="mb-[var(--space-4)] flex items-center justify-between">
+          <h4 className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+            {isEdit ? `エンジンを編集: ${entry!.name}` : "OpenAI 互換エンジンを追加"}
+          </h4>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            閉じる
+          </Button>
+        </div>
+        <form onSubmit={submit} className="flex flex-col gap-[var(--space-4)]">
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              名前 (識別子, [a-z0-9-]+)
+            </label>
+            <input
+              className={inputCls}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="aidea"
+              disabled={isEdit}
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              baseUrl (http(s)://)
+            </label>
+            <input
+              className={inputCls}
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://aidea-agent.dev.gw.link"
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              apiKey{" "}
+              {isEdit && (
+                <span className="text-[var(--text-quaternary)]">
+                  (空欄なら既存キーを維持{entry?.openai?.hasApiKey ? "" : "・現在未設定"})
+                </span>
+              )}
+            </label>
+            <input
+              className={inputCls}
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={isEdit ? "（変更する場合のみ入力）" : "sk-..."}
+              autoComplete="new-password"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              model (任意)
+            </label>
+            <input
+              className={inputCls}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="gpt-4o-mini"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              temperature (任意)
+            </label>
+            <input
+              className={inputCls}
+              value={temperature}
+              onChange={(e) => setTemperature(e.target.value)}
+              placeholder="0.7"
+              inputMode="decimal"
+            />
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "保存中..." : isEdit ? "更新" : "追加"}
+            </Button>
+            <span className="text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
+              反映にはデーモンの再起動が必要です
+            </span>
+          </div>
+        </form>
+
+        {result?.kind === "ok" && (
+          <div
+            className="mt-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)]"
+            style={{ background: "color-mix(in srgb, var(--system-green,#22c55e) 12%, transparent)", color: "var(--text-secondary)" }}
+          >
+            保存しました{result.needsRestart ? "。反映にはデーモンの再起動が必要です。" : "。"}
+          </div>
+        )}
+        {result?.kind === "error" && (
+          <div
+            className="mt-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)] text-[var(--system-red)]"
+            style={{ background: "color-mix(in srgb, var(--system-red) 10%, transparent)" }}
+          >
+            {result.message}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

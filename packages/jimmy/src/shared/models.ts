@@ -6,7 +6,7 @@ import type {
   EffortMechanism,
   EngineModelsConfig,
 } from "./types.js";
-import { BUILTIN_ENGINE_NAMES } from "../engines/registry.js";
+import { BUILTIN_ENGINE_NAMES, engineImplOf } from "../engines/registry.js";
 
 /**
  * Model + capability registry — the single source of truth for which engines and
@@ -140,7 +140,29 @@ export function buildRegistry(config: JinnConfig): ModelRegistry {
       ? fromEngineModelsConfig(name, engineBlock)
       : synthesized[name]; // engine omitted from the block → keep the synthesized entry
   }
+  // Impl-selected engines (impl:"openai" — aidea/kannon/…) are always synthesized
+  // from engines.<name>.model; they aren't in the built-in ENGINE_NAMES list.
+  addImplEngineEntries(registry, config);
   return registry;
+}
+
+/** Append registry entries for config engines that select a shared impl
+ *  (impl:"openai"). Each surfaces its `engines.<name>.model` as a single model so
+ *  the /model picker can switch to it. No effort mechanism. */
+function addImplEngineEntries(registry: ModelRegistry, config: JinnConfig): void {
+  const enginesCfg = (config.engines as unknown as Record<string, unknown>) ?? {};
+  for (const [name, blk] of Object.entries(enginesCfg)) {
+    if (name === "default") continue;
+    if (!engineImplOf(blk)) continue;
+    const modelId = (blk as { model?: string }).model || name;
+    registry[name] = {
+      name,
+      available: true,
+      defaultModel: modelId,
+      effortMechanism: "none",
+      models: [{ id: modelId, label: modelId, supportsEffort: false, effortLevels: [] }],
+    };
+  }
 }
 
 /** Backward-compat: synthesize a minimal registry from engines.<name>.model. */
@@ -164,6 +186,7 @@ export function synthesizeFromEngineConfig(config: JinnConfig): ModelRegistry {
       models: [model],
     };
   }
+  addImplEngineEntries(registry, config);
   return registry;
 }
 

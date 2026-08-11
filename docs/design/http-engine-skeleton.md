@@ -1,5 +1,15 @@
 # Handoff: HTTP (OpenAI-compatible) engine skeleton
 
+> **UPDATE (`feat/openai-engine`):** a **built-in** OpenAI-compatible HTTP engine
+> now ships in-tree — `packages/jimmy/src/engines/openai.ts` +
+> `openai.plugin.ts`, resolved for any config block with `impl: "openai"` (no
+> `pnpm add`, no external package). Multiple named instances share it
+> (`engines.aidea`, `engines.kannon`, …), each with its own baseUrl/apiKey/model,
+> and a Web form on the Plugins page (engine tab) creates/edits them. See
+> `engine-plugins.md` → "Built-in `impl:"openai"` engine". This document remains
+> the reference for building an HTTP engine as an **external SDK package** when you
+> want it out-of-tree; the in-tree engine was written directly from this skeleton.
+
 Status: **handoff reference** for an engine-plugin developer building an HTTP
 engine (an OpenAI-compatible model gateway). The engine is an **external
 `@openbanto/engine-sdk` plugin** — it does NOT edit the OpenBanto core. Copy this
