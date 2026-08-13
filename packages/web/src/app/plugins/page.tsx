@@ -1,14 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type PluginEntry, type PluginsSummary } from "@/lib/api";
+import { api, pollDaemonHealthy, type PluginEntry, type PluginsSummary } from "@/lib/api";
 import { PageLayout } from "@/components/page-layout";
 import { useBreadcrumbs } from "@/context/breadcrumb-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, Power } from "lucide-react";
 
 type PluginType = "engine" | "connector" | "guardrail";
 
@@ -52,9 +52,12 @@ export default function PluginsPage() {
               エンジン / コネクタ / ガードレールのプラグインを管理します
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> 再読込
-          </Button>
+          <div className="flex items-center gap-[var(--space-2)]">
+            {data?.manageUi && <RestartBantoButton onRecovered={load} />}
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> 再読込
+            </Button>
+          </div>
         </div>
 
         {/* Trust warning banner — always visible. */}
@@ -136,6 +139,77 @@ export default function PluginsPage() {
         ) : null}
       </div>
     </PageLayout>
+  );
+}
+
+/**
+ * Admin-only "Banto を再起動" button. Confirm → POST /api/admin/restart → the
+ * daemon self-terminates and systemd (Restart=always) brings it back. We then
+ * poll /api/status until it responds 200 ("復帰しました") and refresh the page
+ * data. During the restart window fetch fails; those errors are swallowed and
+ * retried by pollDaemonHealthy.
+ */
+function RestartBantoButton({ onRecovered }: { onRecovered: () => void }) {
+  const [phase, setPhase] = useState<"idle" | "restarting" | "recovered" | "error">("idle");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const busy = phase === "restarting";
+
+  const restart = useCallback(async () => {
+    if (busy) return;
+    const ok = window.confirm(
+      "Banto（デーモン）を再起動します。実行中のセッションは中断され、数秒〜十数秒アクセスできなくなります。続行しますか？",
+    );
+    if (!ok) return;
+    setPhase("restarting");
+    setMsg(null);
+    try {
+      const res = await api.restartDaemon();
+      // 409 は既に再起動中 — その場合でも復帰を待つ。
+      if (res.restarting) {
+        const healthy = await pollDaemonHealthy({ timeoutMs: 60_000, intervalMs: 1_500 });
+        if (healthy) {
+          setPhase("recovered");
+          setMsg("復帰しました");
+          onRecovered();
+          // 少し見せてから状態を戻す。
+          setTimeout(() => setPhase("idle"), 4_000);
+        } else {
+          setPhase("error");
+          setMsg("復帰の確認がタイムアウトしました。しばらくして再読込してください。");
+        }
+      } else {
+        setPhase("error");
+        setMsg("再起動の受付に失敗しました。");
+      }
+    } catch (err) {
+      setPhase("error");
+      setMsg(err instanceof Error ? err.message : "再起動に失敗しました。");
+    }
+  }, [busy, onRecovered]);
+
+  return (
+    <div className="flex items-center gap-[var(--space-2)]">
+      {msg && (
+        <span
+          className="text-[length:var(--text-caption1)]"
+          style={{
+            color:
+              phase === "error"
+                ? "var(--system-red)"
+                : phase === "recovered"
+                ? "var(--system-green,#22c55e)"
+                : "var(--text-tertiary)",
+          }}
+        >
+          {msg}
+        </span>
+      )}
+      <Button variant="outline" size="sm" onClick={restart} disabled={busy}>
+        <Power size={14} className={busy ? "animate-pulse" : ""} />{" "}
+        {busy ? "再起動中…" : "Banto を再起動"}
+      </Button>
+    </div>
   );
 }
 

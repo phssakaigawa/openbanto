@@ -239,6 +239,11 @@ export const api = {
       "/api/plugins/guardrail",
       data,
     ),
+  /** Admin-only: ask the daemon to self-restart. It replies 200
+   *  {restarting:true} and then (after a short delay) SIGTERMs itself; systemd
+   *  (Restart=always) brings it back. 409 {already:true} if one is in flight. */
+  restartDaemon: () =>
+    post<{ restarting: boolean; already?: boolean }>("/api/admin/restart", {}),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),
   getSkill: (name: string) => get<Record<string, unknown>>(`/api/skills/${name}`),
   getConfig: () => get<Record<string, unknown>>("/api/config"),
@@ -304,3 +309,36 @@ export const api = {
     return res.json()
   },
 };
+
+/**
+ * Poll the daemon health endpoint until it responds 200 (i.e. the gateway has
+ * come back after a restart), or `timeoutMs` elapses. While the daemon is down
+ * fetch rejects (connection refused) — those errors are swallowed and retried.
+ * Returns true if the daemon came back healthy, false on timeout.
+ */
+export async function pollDaemonHealthy(
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const intervalMs = opts.intervalMs ?? 1_500;
+  const deadline = Date.now() + timeoutMs;
+  // Small initial delay: the daemon has only just been asked to go down, so an
+  // immediate probe would hit the still-alive old process and report healthy.
+  await new Promise((r) => setTimeout(r, intervalMs));
+  while (Date.now() < deadline) {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 2_000);
+      const res = await fetch(`${BASE}/api/status`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      clearTimeout(t);
+      if (res.ok) return true;
+    } catch {
+      // Down / connection refused — expected during the restart window. Retry.
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}

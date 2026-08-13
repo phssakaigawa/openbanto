@@ -73,6 +73,7 @@ import {
   type OpenAiEngineRequest,
   type SetGuardrailRequest,
 } from "./plugins-api.js";
+import { armSelfRestart, isRestarting } from "./self-restart.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
@@ -1427,6 +1428,45 @@ Handle this as a priority request from a colleague.`;
       removeFromManifest(params.name);
       logger.info(`Skill removed via API: ${params.name}`);
       return json(res, { status: "removed", name: params.name });
+    }
+
+    // ---- Admin: self-restart the daemon -----------------------------------
+    // POST /api/admin/restart — admin-only "Banto を再起動". Gated by the SAME
+    // requirePluginAdmin() as every /api/plugins* route (manageUi flag + admin
+    // group / loopback fallback) and audited. The restart is a *self-terminate*:
+    // we reply 200 {restarting:true}, flush, then after a short delay deliver
+    // SIGTERM to our own pid. lifecycle.ts runs the existing graceful shutdown
+    // and process.exit(0)s; the systemd (user) unit `getworks-banto`
+    // (Restart=always) restarts us. We never shell out to systemctl.
+    // See docs/design/plugin-manage-ui.md § restart.
+    if (method === "POST" && pathname === "/api/admin/restart") {
+      const gate = requirePluginAdmin(req, context.getConfig());
+      if (!gate.ok) {
+        return json(res, { error: gate.reason || "forbidden" }, gate.status ?? 403);
+      }
+      const who = gate.who || "unknown";
+
+      // Single-flight: if a restart is already armed, don't arm a second one.
+      if (isRestarting()) {
+        await auditPluginAction(
+          { who, action: "daemon.restart", result: "already" },
+          context.auditSink,
+        );
+        return json(res, { restarting: true, already: true }, 409);
+      }
+
+      const armed = armSelfRestart({ delayMs: 700 });
+      await auditPluginAction(
+        { who, action: "daemon.restart", result: armed.armed ? "ok" : "already" },
+        context.auditSink,
+      );
+      if (!armed.armed) {
+        // Lost a race between the isRestarting() check and arming.
+        return json(res, { restarting: true, already: true }, 409);
+      }
+      // 200 first — the SIGTERM is deferred so this response flushes to the
+      // client before the process goes down.
+      return json(res, { restarting: true });
     }
 
     // ---- Plugin management (Gated Install) --------------------------------
