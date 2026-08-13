@@ -81,6 +81,7 @@ All routes require `requirePluginAdmin`.
 | `POST /api/plugins/install` | `{ pluginType, name, module, config? }` → validate module, `pnpm add`, patch `config.yaml`, reload/needsRestart. Returns `stderr` on `pnpm` failure. |
 | `POST /api/plugins/toggle` | `{ pluginType, name, enabled }` → engine: flip `engines.default`; connector: set `enabled`; guardrail: drop/keep `module`. |
 | `PUT  /api/plugins/config` | `{ pluginType, name, config }` → replace that plugin's config block. |
+| `POST /api/admin/restart` | Admin-only **self-restart** of the daemon. Replies `200 {restarting:true}`, flushes, then SIGTERMs its own pid; systemd restarts it. `409 {restarting:true, already:true}` when one is already in flight. |
 
 Config is patched by the same merge-from-disk writer semantics as
 `PUT /api/config` (read `config.yaml`, mutate, `yaml.dump`, write). `plugins` and
@@ -103,6 +104,42 @@ This mirrors the existing hot-reload seam in `gateway/server.ts`:
 `invalidateModelRegistry()` is always called after a patch so the model/engine
 capability registry is rebuilt on next read.
 
+## Self-restart — `POST /api/admin/restart` (`gateway/self-restart.ts`)
+
+Engine / guardrail changes need a daemon restart (above). Rather than make the
+operator shell into the box, the Plugins page offers an admin **"Banto を再起動"**
+button. The mechanism relies on one load-bearing deployment fact:
+
+> The banto daemon runs under a **systemd (user) unit `getworks-banto` with
+> `Restart=always`** (実機 `gw-banto01`). If the process exits or is SIGTERM'd,
+> systemd brings it straight back up.
+
+So a "restart" is simply a **self-terminate** — we do **not** shell out to
+`systemctl` (no `execFile`, no privileged call). The flow:
+
+1. `requirePluginAdmin(req, config)` gate — the SAME gate as every
+   `/api/plugins*` route (`manageUi:true` + `X-Forwarded-Groups` ∋ `adminGroup`,
+   or a loopback socket). Non-admin / feature-off → `403`.
+2. `auditPluginAction({ who, action:"daemon.restart", … })` — the same audit
+   sink (logger + optional guardrail `afterTurn`) as the plugin routes.
+3. **Single-flight**: a module-scoped `restarting` flag. A second call while one
+   is armed returns `409 {restarting:true, already:true}` and arms nothing
+   (guards double-click / concurrent admins).
+4. Reply `200 {restarting:true}` and flush, **then** after a short delay (700ms)
+   `process.kill(process.pid, "SIGTERM")`. The delay lets the HTTP response reach
+   the client before the socket drops.
+5. `SIGTERM` is caught by `lifecycle.ts`'s existing `shutdown` handler
+   ("Shutting down gateway…"), which runs the **existing graceful shutdown**
+   (mark running sessions `interrupted`, engines `killAll`, connectors `stop`,
+   HTTP/WS servers close) with a 5s force-exit backstop, then `process.exit(0)`.
+6. systemd (`Restart=always`) restarts the daemon with the new config in effect.
+
+`gateway/self-restart.ts` isolates the mechanics (`armSelfRestart()` +
+`isRestarting()`), with the `kill`/`pid` injectable so unit tests exercise the
+single-flight + deferred-signal logic **without terminating the test runner**.
+The route gate (non-admin→403, admin→`restarting`) and in-flight `409` are
+covered in `admin-restart-endpoint.test.ts`.
+
 ## WebUI
 
 `packages/web/src/app/plugins/page.tsx`, linked from the sidebar (`/plugins`,
@@ -114,3 +151,11 @@ page shows an "この機能は無効です" card with the enablement snippet and
 install form. Data via `@/lib/api` (`getPlugins` / `installPlugin` /
 `togglePlugin` / `updatePluginConfig`), matching the existing web data-fetch
 conventions.
+
+When `manageUi` is true a **"Banto を再起動"** button sits in the page header
+(next to 再読込). Clicking it: `window.confirm` → `api.restartDaemon()` (POST
+`/api/admin/restart`) → shows "再起動中…" → `pollDaemonHealthy()` polls
+`GET /api/status` every ~1.5s (fetch failures during the down window are
+swallowed and retried) until it responds `200` → "復帰しました", then refreshes
+the page data. The button is disabled while a restart is in flight (連打防止);
+failures / a poll timeout surface an inline message.

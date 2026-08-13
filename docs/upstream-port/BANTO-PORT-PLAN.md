@@ -141,6 +141,19 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 
 ---
 
+### L. WebUI からのデーモン自己再起動（Banto 再起動、OpenBanto 独自）
+§I〜K の「engine/guardrail 変更は `needsRestart:true`」を、**運用者がボックスに SSH せず WebUI から再起動**できるようにしたもの。番頭は **systemd(user) ユニット `getworks-banto`（`Restart=always`）** で常駐（実機 `gw-banto01`）＝プロセスが SIGTERM/正常終了すると systemd が自動復帰する。この事実を使い、`systemctl` を**外部から叩かず**「**自プロセスへ SIGTERM**」で再起動する（`execFile`/`systemctl` 不使用）。管理ゲート・監査は §I の `/api/plugins*` と同一。詳細は `docs/design/plugin-manage-ui.md` § restart。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| 自己再起動機構（新規） | `packages/jimmy/src/gateway/self-restart.ts`（`armSelfRestart({delayMs,kill,pid})` / `isRestarting()`／モジュールスコープ `restarting` フラグで single-flight） | **★`systemctl` を叩かない**（`Restart=always` に委ねる）。200 flush 用に **遅延 700ms 後** `process.kill(process.pid,"SIGTERM")`。`kill`/`pid` は注入可（テストで実プロセスを殺さない）。timer は `unref()` |
+| ルータ配線 | `gateway/api.ts`（`POST /api/admin/restart` を `handleApiRequest` に追加） | **`requirePluginAdmin` 必須**（§I と同一ゲート）→ 非admin/機能OFF=403。`auditPluginAction({action:"daemon.restart"})`。**先に 200 `{restarting:true}` を返し**、その後 `armSelfRestart`。in-flight は `isRestarting()`→ **409 `{restarting:true,already:true}`**（`armSelfRestart` を呼ばない） |
+| shutdown 再利用 | `gateway/lifecycle.ts`（既存 SIGTERM ハンドラ "Shutting down gateway…"） | 新規コードなし。SIGTERM→既存グレースフル shutdown（running セッション interrupted 化・engines killAll・connectors stop・HTTP/WS close、5s 強制終了バックストップ）→`process.exit(0)`→systemd 復帰。**上流が SIGTERM ハンドラ/cleanup を動かしたら自己再起動が graceful でなくなる** |
+| WebUI（ボタン） | `packages/web/src/app/plugins/page.tsx`（`RestartBantoButton`、ヘッダの 再読込 隣、`manageUi:true` 時のみ）+ `lib/api.ts`（`restartDaemon`＋`pollDaemonHealthy`） | 確認ダイアログ→POST→「再起動中…」→`/api/status` を ~1.5s 間隔 poll（down 中の fetch 失敗は握り潰しリトライ）→200 で「復帰しました」→データ再取得。連打防止（busy 中 disabled）・poll timeout/失敗はインラインメッセージ |
+| 単体テスト | `gateway/__tests__/self-restart.test.ts`（single-flight＋遅延 SIGTERM を注入 kill で検証）+ `gateway/__tests__/admin-restart-endpoint.test.ts`（非admin→403・manageUi 無効→403・admin→`restarting`・in-flight→409、self-restart は mock） | **プロセスを実際に殺さない**（fake timer＋注入 kill／self-restart.js を mock）。上流が req/socket 形やゲートを変えたら追随 |
+
+---
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先
