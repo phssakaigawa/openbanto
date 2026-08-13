@@ -125,6 +125,22 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 
 ---
 
+### K. サンプル・ガードレール ポリシーパック（`impl:"sample"`）＋Web 設定フォーム（OpenBanto 独自）
+§H のガードレール機構の上に、**組込み・設定駆動のサンプルポリシー**を載せたもの。§J の `impl:"openai"` エンジンと同型で、外部モジュールを `pnpm add` せずに **Web フォームから本物の permission/approval/audit ポリシーを投入**できる。**opt-in**（`impl` 無指定なら従来通り no-op「allow-all」で挙動不変）。判定は `GuardrailContext` の `userId/toolbelt/text` 基準（**Keycloak groups はターン文脈に無い**）。詳細は `docs/design/guardrails-hooks.md`。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| サンプル実装（新規） | `packages/jimmy/src/guardrails/sample.plugin.ts`（`defineGuardrailPlugin` name="sample"、config駆動 beforeTurn/afterTurn） | **beforeTurn 判定順序=①allowUsers→allow ②deny(text.toLowerCase contains)→deny ③requireApproval(toolbelt∩tools)→require_approval ④allow**。config 全欠如は allow（安全側）。afterTurn=`{ts,who,connector,channel,engine,ok,cost,tokens,error?}` を sink へ（log=logger.info 1行 / http=best-effort fetch POST・**throw しない**）。**endpoint/auth header と生 text をログ・レコードに出さない** |
+| registry（impl 解決） | `guardrails/registry.ts`（`IMPL_PLUGINS`/`GUARDRAIL_IMPL_NAMES`/`guardrailImplOf`、`resolveGuardrail(blockOrModule)` を **module→impl→no-op** の3経路化） | §J の engine impl と同型。`resolveGuardrail` は後方互換で string(module) も受理。**module 優先、その後 impl、最後に no-op**。上流が引数を module 文字列前提に戻したらブロック受理を追随 |
+| 起動時注入 | `gateway/server.ts`（`resolveGuardrail(config.guardrails)` にブロック全体を渡す、impl 時にログ） | ブロックを渡さないと impl 経路が死ぬ（module だけ見て no-op fallback） |
+| config 型 | `shared/types.ts`（`guardrails?: { module?; impl?; config? }` に `impl?` 追加） | runtime schema なし（YAML cast）。`gateway/api.ts` `KNOWN_KEYS` の `guardrails` は既存流用 |
+| gateway API（新規） | `gateway/plugins-api.ts`（`setGuardrail`＝**pnpm add しない**・policy=none/sample/module で `guardrails` ブロック書込・`needsRestart:true`）+ `gateway/api.ts` `POST /api/plugins/guardrail`（`requirePluginAdmin`・監査） | policy=none→ブロック削除(allow-all)、sample→flat フィールドから `{impl:"sample",config}` 組立、module→`validateModuleSpec` 流用。**auditEndpoint はレスポンスに返さない・監査は policy 種別のみ**。auditSink=http は endpoint を http(s) 検証 |
+| summary マスク | `gateway/plugins-api.ts`（`summarizePlugins` guardrail に `impl`/`sample`＝`{allowUsers,denyKeywords,approvalTools,approvers,auditSink,hasAuditEndpoint}`、`PluginEntry.sample` 追加、`summarizeSampleConfig`） | **endpoint は `hasAuditEndpoint` にマスク**、生値を返さない |
+| WebUI（フォーム） | `packages/web/src/app/plugins/page.tsx`（`GuardrailSection`, ガードレールタブ）+ `lib/api.ts`（`setGuardrail`+`PluginEntry.sample`） | ポリシー種別 None/Sample/External を select、Sample=カンマ区切り入力、External=module+JSON。現状 prefill・信頼警告バナー（ターン実行を止める強い権限）・再起動要を明示 |
+| 単体テスト | `guardrails/__tests__/sample.plugin.test.ts`（beforeTurn の allow/deny/require_approval 分岐＋順序・空config allow・afterTurn log/http のthrow なし・**endpoint 非ログ**） | impl 解決経路で beforeTurn 分岐を回帰検知 |
+
+---
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先

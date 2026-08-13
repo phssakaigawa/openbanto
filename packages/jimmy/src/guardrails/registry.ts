@@ -82,20 +82,62 @@ const NOOP_PLUGIN: GuardrailPlugin = {
   },
 };
 
+// ---- `impl`-selected built-in policy packs ---------------------------------
+// A guardrail block may name a shared IN-TREE IMPLEMENTATION rather than an
+// external `module`: `guardrails.impl = "sample"`. This is the second resolution
+// path (mirroring engines/registry.ts `IMPL_PLUGINS` / `engineImplOf`): it lets
+// an operator turn on a real, config-driven policy pack from the Web form without
+// running `pnpm add`. The lazy factory keeps the module out of the graph until an
+// impl guardrail is actually configured.
+
+const IMPL_PLUGINS: Record<string, () => Promise<GuardrailPlugin>> = {
+  sample: async () => (await import("./sample.plugin.js")).default,
+};
+
+/** Known guardrail impl names (config `guardrails.impl` values). */
+export const GUARDRAIL_IMPL_NAMES = ["sample"] as const;
+
+/** The `impl` a guardrail block selects (e.g. "sample"), or undefined. */
+export function guardrailImplOf(block: unknown): string | undefined {
+  if (block && typeof block === "object") {
+    const impl = (block as { impl?: unknown }).impl;
+    if (typeof impl === "string" && impl in IMPL_PLUGINS) return impl;
+  }
+  return undefined;
+}
+
 /**
- * Resolve the guardrail plugin. With no `module` the built-in no-op "allow-all"
- * plugin is returned (guardrails are opt-in). An external `module` specifier is
- * dynamic-imported by name; a load failure is surfaced with an install hint,
- * mirroring resolvePlugin/resolveEngine.
+ * Resolve the guardrail plugin. Three paths, in order (mirroring resolveEngine):
+ *  1. external `module` specifier → dynamic import (load failure ⇒ install hint);
+ *  2. `impl: "sample"` in the block → shared in-tree implementation;
+ *  3. neither → the built-in no-op "allow-all" plugin (guardrails are opt-in).
+ *
+ * The argument accepts either the whole `guardrails` block (preferred) or, for
+ * backward compatibility, just the `module` string.
  */
-export async function resolveGuardrail(module?: string): Promise<GuardrailPlugin> {
-  if (!module) return NOOP_PLUGIN;
-  const mod = await import(module).catch(() => {
-    throw new Error(
-      `Guardrail plugin "${module}" could not be loaded. Install it: npm i ${module}`,
-    );
-  });
-  return (mod.default ?? mod) as GuardrailPlugin;
+export async function resolveGuardrail(
+  blockOrModule?: string | { module?: string; impl?: string; config?: Record<string, any> },
+): Promise<GuardrailPlugin> {
+  const block: { module?: string; impl?: string } | undefined =
+    typeof blockOrModule === "string" ? { module: blockOrModule } : blockOrModule;
+
+  // (1) external module plugin.
+  if (block?.module) {
+    const module = block.module;
+    const mod = await import(module).catch(() => {
+      throw new Error(
+        `Guardrail plugin "${module}" could not be loaded. Install it: npm i ${module}`,
+      );
+    });
+    return (mod.default ?? mod) as GuardrailPlugin;
+  }
+
+  // (2) impl-selected built-in policy pack (e.g. sample).
+  const impl = guardrailImplOf(block);
+  if (impl) return IMPL_PLUGINS[impl]();
+
+  // (3) opt-in default: no policy ⇒ allow-all.
+  return NOOP_PLUGIN;
 }
 
 /** Authoring helper mirroring @openbanto/guardrail-sdk's `defineGuardrailPlugin`
