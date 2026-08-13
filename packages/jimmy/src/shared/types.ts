@@ -658,12 +658,15 @@ export interface JinnConfig {
     channel?: string;    // Discord channel ID for admin notifications
   };
   portal?: PortalConfig;
-  /** Optional guardrail policy pack. `module` is an external plugin specifier
-   *  the registry dynamic-imports (omit → built-in no-op "allow-all"); `config`
-   *  is the policy-specific block passed to the plugin's create(). See
-   *  guardrails/registry.ts and docs/design/guardrails-hooks.md. */
+  /** Optional guardrail policy pack. Resolution order: `module` (external plugin
+   *  specifier the registry dynamic-imports) → `impl` (built-in in-tree policy
+   *  pack, e.g. `impl:"sample"`) → neither → built-in no-op "allow-all"
+   *  (guardrails are opt-in). `config` is the policy-specific block passed to the
+   *  plugin's create(). See guardrails/registry.ts and
+   *  docs/design/guardrails-hooks.md. */
   guardrails?: {
     module?: string;
+    impl?: string;
     config?: Record<string, unknown>;
   };
   /** Optional plugin management UI (Gated Install). This gates a strong,

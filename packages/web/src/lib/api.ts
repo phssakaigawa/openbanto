@@ -64,6 +64,16 @@ export interface PluginEntry {
   impl?: string;
   /** Non-secret openai engine fields (apiKey never included — only hasApiKey). */
   openai?: { baseUrl?: string; model?: string; temperature?: number; hasApiKey: boolean };
+  /** Non-secret view of the built-in "sample" guardrail policy (audit endpoint
+   *  masked to hasAuditEndpoint — never included). */
+  sample?: {
+    allowUsers: string[];
+    denyKeywords: string[];
+    approvalTools: string[];
+    approvers: string[];
+    auditSink: "log" | "http";
+    hasAuditEndpoint: boolean;
+  };
 }
 
 export interface PluginsSummary {
@@ -206,6 +216,27 @@ export const api = {
   }) =>
     post<{ status: string; needsRestart?: boolean; message?: string; created?: boolean }>(
       "/api/plugins/engine-openai",
+      data,
+    ),
+  /** Set the single guardrail policy. policy=none clears it (→ allow-all);
+   *  policy=sample writes the in-tree impl:"sample" from flat fields (no pnpm
+   *  add); policy=module writes an external spec + JSON config. Needs a restart.
+   *  auditEndpoint is stored server-side and never echoed back. */
+  setGuardrail: (data: {
+    policy: "none" | "sample" | "module";
+    allowUsers?: string[];
+    denyKeywords?: string[];
+    denyReason?: string;
+    approvalTools?: string[];
+    approvers?: string[];
+    approvalReason?: string;
+    auditSink?: "log" | "http";
+    auditEndpoint?: string;
+    module?: string;
+    config?: Record<string, unknown>;
+  }) =>
+    post<{ status: string; needsRestart?: boolean; message?: string; policy?: string }>(
+      "/api/plugins/guardrail",
       data,
     ),
   getSkills: () => get<Record<string, unknown>[]>("/api/skills"),

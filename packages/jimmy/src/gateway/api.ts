@@ -65,11 +65,13 @@ import {
   togglePlugin,
   updatePluginConfig,
   upsertOpenAiEngine,
+  setGuardrail,
   auditPluginAction,
   type InstallRequest,
   type ToggleRequest,
   type ConfigUpdateRequest,
   type OpenAiEngineRequest,
+  type SetGuardrailRequest,
 } from "./plugins-api.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
@@ -1494,6 +1496,31 @@ Handle this as a priority request from a colleague.`;
             action: result.body.created ? "engine.openai.create" : "engine.openai.update",
             pluginType: "engine",
             name: body?.name,
+            result: result.body.status,
+          },
+          context.auditSink,
+        );
+        if (result.patched) invalidateModelRegistry();
+        return json(res, result.body, result.http);
+      }
+
+      // POST /api/plugins/guardrail — set the single guardrail policy pack.
+      // policy=none clears it (→ no-op allow-all); policy=sample writes the
+      // in-tree impl:"sample" from flat form fields (no pnpm add); policy=module
+      // writes an external plugin spec + raw config. Always needsRestart (the
+      // guardrail is built once at boot). The audit endpoint is never echoed;
+      // the audit record logs only the policy kind.
+      if (method === "POST" && pathname === "/api/plugins/guardrail") {
+        const _parsed = await readJsonBody(req, res);
+        if (!_parsed.ok) return;
+        const body = _parsed.body as SetGuardrailRequest;
+        const result = setGuardrail(body);
+        await auditPluginAction(
+          {
+            who,
+            action: "guardrail.set",
+            pluginType: "guardrail",
+            name: result.body.policy ?? body?.policy,
             result: result.body.status,
           },
           context.auditSink,

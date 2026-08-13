@@ -127,6 +127,7 @@ export default function PluginsPage() {
               </TabsContent>
               <TabsContent value="guardrail">
                 <PluginList type="guardrail" items={data.guardrails} onChanged={load} />
+                {data.manageUi && <GuardrailSection current={data.guardrails[0]} onChanged={load} />}
               </TabsContent>
             </Tabs>
 
@@ -435,6 +436,287 @@ function OpenAiEngineForm({
           <div className="flex items-center gap-3">
             <Button type="submit" disabled={submitting}>
               {submitting ? "保存中..." : isEdit ? "更新" : "追加"}
+            </Button>
+            <span className="text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
+              反映にはデーモンの再起動が必要です
+            </span>
+          </div>
+        </form>
+
+        {result?.kind === "ok" && (
+          <div
+            className="mt-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)]"
+            style={{ background: "color-mix(in srgb, var(--system-green,#22c55e) 12%, transparent)", color: "var(--text-secondary)" }}
+          >
+            保存しました{result.needsRestart ? "。反映にはデーモンの再起動が必要です。" : "。"}
+          </div>
+        )}
+        {result?.kind === "error" && (
+          <div
+            className="mt-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)] text-[var(--system-red)]"
+            style={{ background: "color-mix(in srgb, var(--system-red) 10%, transparent)" }}
+          >
+            {result.message}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Guardrail policy form (single instance). Selects the policy KIND
+ *  (None / Sample built-in / External module) and edits the fields for the
+ *  chosen kind. Prefilled from the current `guardrails` summary. The audit
+ *  endpoint is write-only: on edit it stays blank and is only sent when re-typed
+ *  (server keeps the stored value unless a new one is provided — actually it
+ *  rewrites the whole block, so re-enter it if you keep the http sink). */
+function GuardrailSection({
+  current,
+  onChanged,
+}: {
+  current: PluginEntry | undefined;
+  onChanged: () => void;
+}) {
+  // Derive the initial policy kind from the summary.
+  const initialPolicy: "none" | "sample" | "module" = current?.module
+    ? "module"
+    : current?.impl === "sample"
+      ? "sample"
+      : "none";
+
+  const [policy, setPolicy] = useState<"none" | "sample" | "module">(initialPolicy);
+
+  // Sample fields (prefilled from summary.sample).
+  const s = current?.sample;
+  const [allowUsers, setAllowUsers] = useState((s?.allowUsers ?? []).join(", "));
+  const [denyKeywords, setDenyKeywords] = useState((s?.denyKeywords ?? []).join(", "));
+  const [approvalTools, setApprovalTools] = useState((s?.approvalTools ?? []).join(", "));
+  const [approvers, setApprovers] = useState((s?.approvers ?? []).join(", "));
+  const [auditSink, setAuditSink] = useState<"log" | "http">(s?.auditSink ?? "log");
+  const [auditEndpoint, setAuditEndpoint] = useState("");
+
+  // Module fields.
+  const [moduleSpec, setModuleSpec] = useState(current?.module ?? "");
+  // Module config isn't surfaced by the summary (may contain secrets) — start blank.
+  const [configText, setConfigText] = useState("");
+
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<
+    | { kind: "ok"; needsRestart?: boolean }
+    | { kind: "error"; message: string }
+    | null
+  >(null);
+
+  const inputCls =
+    "w-full rounded-[var(--radius-md,12px)] border border-border bg-[var(--bg-secondary)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-body)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]";
+
+  const splitCsv = (v: string) =>
+    v.split(",").map((x) => x.trim()).filter(Boolean);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setResult(null);
+
+    if (policy === "module" && !moduleSpec.trim()) {
+      setResult({ kind: "error", message: "モジュール指定子を入力してください" });
+      return;
+    }
+    let config: Record<string, unknown> | undefined;
+    if (policy === "module" && configText.trim()) {
+      try {
+        config = JSON.parse(configText);
+      } catch {
+        setResult({ kind: "error", message: "config は有効な JSON である必要があります" });
+        return;
+      }
+    }
+    if (policy === "sample" && auditSink === "http" && !/^https?:\/\//.test(auditEndpoint.trim())) {
+      setResult({ kind: "error", message: "auditSink=http のときは http(s) の endpoint が必要です" });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await api.setGuardrail(
+        policy === "sample"
+          ? {
+              policy: "sample",
+              allowUsers: splitCsv(allowUsers),
+              denyKeywords: splitCsv(denyKeywords),
+              approvalTools: splitCsv(approvalTools),
+              approvers: splitCsv(approvers),
+              auditSink,
+              ...(auditSink === "http" ? { auditEndpoint: auditEndpoint.trim() } : {}),
+            }
+          : policy === "module"
+            ? { policy: "module", module: moduleSpec.trim(), ...(config ? { config } : {}) }
+            : { policy: "none" },
+      );
+      if (res.status === "ok") {
+        setResult({ kind: "ok", needsRestart: res.needsRestart });
+        setAuditEndpoint("");
+        onChanged();
+      } else {
+        setResult({ kind: "error", message: res.message || "保存に失敗しました" });
+      }
+    } catch (err) {
+      setResult({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card className="mt-[var(--space-6)]">
+      <CardContent className="p-[var(--space-5)]">
+        <h3 className="mb-[var(--space-2)] text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+          ガードレール ポリシー設定
+        </h3>
+        {/* Strong-permission warning — a guardrail can STOP turn execution. */}
+        <div
+          className="mb-[var(--space-4)] flex gap-2 rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption2)] text-[var(--text-secondary)]"
+          style={{
+            background: "color-mix(in srgb, var(--system-orange,#f59e0b) 10%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--system-orange,#f59e0b) 30%, transparent)",
+          }}
+        >
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-[var(--system-orange,#f59e0b)]" />
+          <span>
+            ガードレールは<strong>全ターンの実行を止められる強い権限</strong>を持ちます（deny =
+            即ブロック / require_approval = 承認待ち）。ルールは userId / toolbelt / text
+            を基準に評価されます（Keycloak groups はターン文脈に含まれません）。
+          </span>
+        </div>
+
+        <form onSubmit={submit} className="flex flex-col gap-[var(--space-4)]">
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              ポリシー種別
+            </label>
+            <select
+              value={policy}
+              onChange={(e) => setPolicy(e.target.value as "none" | "sample" | "module")}
+              className={inputCls}
+            >
+              <option value="none">None（allow-all / 無効化）</option>
+              <option value="sample">Sample（組込みポリシーパック）</option>
+              <option value="module">External module（外部プラグイン）</option>
+            </select>
+          </div>
+
+          {policy === "sample" && (
+            <>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  allowUsers（常に許可する userId, カンマ区切り）
+                </label>
+                <input
+                  className={inputCls}
+                  value={allowUsers}
+                  onChange={(e) => setAllowUsers(e.target.value)}
+                  placeholder="U012ADMIN, U034OPS"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  denyKeywords（text に含めば拒否, カンマ区切り）
+                </label>
+                <input
+                  className={inputCls}
+                  value={denyKeywords}
+                  onChange={(e) => setDenyKeywords(e.target.value)}
+                  placeholder="rm -rf /, drop database"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  approvalTools（toolbelt に含めば承認要求, カンマ区切り）
+                </label>
+                <input
+                  className={inputCls}
+                  value={approvalTools}
+                  onChange={(e) => setApprovalTools(e.target.value)}
+                  placeholder="calendar, ledger"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  approvers（承認者 userId, カンマ区切り, 任意）
+                </label>
+                <input
+                  className={inputCls}
+                  value={approvers}
+                  onChange={(e) => setApprovers(e.target.value)}
+                  placeholder="U012ADMIN"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  auditSink
+                </label>
+                <select
+                  value={auditSink}
+                  onChange={(e) => setAuditSink(e.target.value as "log" | "http")}
+                  className={inputCls}
+                >
+                  <option value="log">log（logger.info に1行）</option>
+                  <option value="http">http（外部監査GWへPOST）</option>
+                </select>
+              </div>
+              {auditSink === "http" && (
+                <div>
+                  <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                    auditEndpoint（http(s) POST 先）
+                    {s?.hasAuditEndpoint && (
+                      <span className="text-[var(--text-quaternary)]">
+                        {" "}（設定済・保存時は再入力してください）
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    className={inputCls}
+                    value={auditEndpoint}
+                    onChange={(e) => setAuditEndpoint(e.target.value)}
+                    placeholder="https://kannon.dev.gw.link/audit"
+                  />
+                </div>
+              )}
+            </>
+          )}
+
+          {policy === "module" && (
+            <>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  モジュール（npm パッケージ名 または git+https://... ）
+                </label>
+                <input
+                  className={inputCls}
+                  value={moduleSpec}
+                  onChange={(e) => setModuleSpec(e.target.value)}
+                  placeholder="@acme/guardrail-policy"
+                />
+                <p className="mt-1 text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
+                  ※ 外部モジュールは別途インストールが必要です（この保存は config への配線のみ）。
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  config（JSON, 任意）
+                </label>
+                <textarea
+                  className={`${inputCls} font-mono min-h-[100px]`}
+                  value={configText}
+                  onChange={(e) => setConfigText(e.target.value)}
+                  placeholder='{ "blocklist": ["secret"] }'
+                />
+              </div>
+            </>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "保存中..." : "保存"}
             </Button>
             <span className="text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
               反映にはデーモンの再起動が必要です

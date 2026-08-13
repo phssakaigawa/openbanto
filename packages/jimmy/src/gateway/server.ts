@@ -274,10 +274,14 @@ export async function startGateway(
   // guardrail is installed (opt-in), so behaviour is unchanged unless a policy
   // pack is configured. Built once and injected into the SessionManager, mirroring
   // how the engines Map is injected.
-  const guardrailPlugin = await resolveGuardrail(config.guardrails?.module);
+  // Pass the whole block so the registry can pick module → impl → no-op. With no
+  // module and no impl the built-in no-op "allow-all" is installed (opt-in).
+  const guardrailPlugin = await resolveGuardrail(config.guardrails);
   const guardrail = await guardrailPlugin.create(config.guardrails?.config ?? {}, { logger, config });
   if (config.guardrails?.module) {
     logger.info(`Guardrail plugin "${guardrailPlugin.name}" loaded from module "${config.guardrails.module}"`);
+  } else if (config.guardrails?.impl) {
+    logger.info(`Guardrail policy pack "${guardrailPlugin.name}" loaded (impl:"${config.guardrails.impl}")`);
   }
 
   // Session manager

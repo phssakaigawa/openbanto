@@ -208,6 +208,16 @@ export interface PluginEntry {
   /** Non-secret openai engine fields surfaced so the Web edit form can prefill.
    *  The apiKey is NEVER included — only whether one is set. */
   openai?: { baseUrl?: string; model?: string; temperature?: number; hasApiKey: boolean };
+  /** Non-secret view of the built-in "sample" guardrail policy, so the Web form
+   *  can prefill. The audit endpoint / auth headers are masked to a boolean. */
+  sample?: {
+    allowUsers: string[];
+    denyKeywords: string[];
+    approvalTools: string[];
+    approvers: string[];
+    auditSink: "log" | "http";
+    hasAuditEndpoint: boolean;
+  };
 }
 
 export interface PluginsSummary {
@@ -225,6 +235,43 @@ const ENGINE_META_KEYS = new Set([
   // openai impl block keys
   "impl", "baseUrl", "apiKey", "headers", "temperature", "name",
 ]);
+
+/** Reduce a stored `guardrails.config` (the sample policy shape) to the flat,
+ *  non-secret fields the Web form edits. The audit endpoint / headers are masked
+ *  to a boolean — never echoed. Tolerant of hand-written YAML (missing keys OK). */
+function summarizeSampleConfig(cfg: unknown): PluginEntry["sample"] {
+  const c = (cfg && typeof cfg === "object" ? cfg : {}) as Record<string, any>;
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  // denyKeywords: flatten every deny rule's `contains` (the form models one rule).
+  const denyKeywords: string[] = [];
+  if (Array.isArray(c.deny)) {
+    for (const r of c.deny) {
+      if (r && typeof r === "object") denyKeywords.push(...strArr((r as any).contains));
+    }
+  }
+  // approvalTools / approvers: flatten every requireApproval rule.
+  const approvalTools: string[] = [];
+  const approvers: string[] = [];
+  if (Array.isArray(c.requireApproval)) {
+    for (const r of c.requireApproval) {
+      if (r && typeof r === "object") {
+        approvalTools.push(...strArr((r as any).tools));
+        approvers.push(...strArr((r as any).approvers));
+      }
+    }
+  }
+  const audit = (c.audit && typeof c.audit === "object" ? c.audit : {}) as Record<string, any>;
+  const auditSink = audit.sink === "http" ? "http" : "log";
+  return {
+    allowUsers: strArr(c.allowUsers),
+    denyKeywords,
+    approvalTools,
+    approvers: Array.from(new Set(approvers)),
+    auditSink,
+    hasAuditEndpoint: typeof audit.endpoint === "string" && audit.endpoint.length > 0,
+  };
+}
 
 /** Build the plugin summary from the live config. */
 export function summarizePlugins(config: JinnConfig): PluginsSummary {
@@ -287,14 +334,21 @@ export function summarizePlugins(config: JinnConfig): PluginsSummary {
   }
 
   const guardrails: PluginEntry[] = [];
-  const gr = config.guardrails;
-  if (gr && (gr.module || gr.config)) {
+  const gr = config.guardrails as
+    | { module?: string; impl?: string; config?: Record<string, any> }
+    | undefined;
+  if (gr && (gr.module || gr.impl || gr.config)) {
+    const impl = typeof gr.impl === "string" ? gr.impl : undefined;
     guardrails.push({
-      name: gr.module ? gr.module : "noop",
+      name: gr.module ? gr.module : impl ? impl : "noop",
       kind: gr.module ? "module" : "builtin",
       module: gr.module,
       enabled: true,
       hasConfig: !!gr.config && Object.keys(gr.config).length > 0,
+      ...(impl ? { impl } : {}),
+      // Non-secret view of the sample policy so the Web form can prefill. The
+      // audit endpoint and any auth headers are masked to a boolean.
+      ...(impl === "sample" ? { sample: summarizeSampleConfig(gr.config) } : {}),
     });
   } else {
     guardrails.push({ name: "noop", kind: "builtin", enabled: true, hasConfig: false });
@@ -489,6 +543,125 @@ export function upsertOpenAiEngine(
   cfg.engines[name] = block;
   writeConfigToDisk(cfg);
   return { http: 200, body: { status: "ok", needsRestart: true, created }, patched: true };
+}
+
+// ---- Guardrail (single policy pack) ----------------------------------------
+
+export interface SetGuardrailRequest {
+  /** "none" clears the policy (falls back to no-op allow-all); "sample" writes
+   *  the built-in policy from the flat form fields; "module" writes an external
+   *  plugin specifier plus a raw JSON config. */
+  policy: "none" | "sample" | "module";
+  // sample fields
+  allowUsers?: string[];
+  denyKeywords?: string[];
+  denyReason?: string;
+  approvalTools?: string[];
+  approvers?: string[];
+  approvalReason?: string;
+  auditSink?: "log" | "http";
+  auditEndpoint?: string;
+  // module fields
+  module?: string;
+  config?: Record<string, unknown>;
+}
+
+/** Coerce an unknown to a clean string[] (trim, drop empties, dedupe-preserving). */
+function cleanStrings(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v) {
+    if (typeof x !== "string") continue;
+    const t = x.trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Write the single `guardrails` policy block. Unlike installPlugin this does NOT
+ * run `pnpm add` for the "sample" / "none" paths — the sample policy is in-tree
+ * (impl:"sample"). The "module" path validates the specifier with the SAME
+ * validateModuleSpec used by install (external plugins still require the package
+ * to be installed separately). Always needsRestart (the guardrail is built once
+ * at boot). The audit endpoint is stored but NEVER echoed back.
+ */
+export function setGuardrail(
+  reqBody: SetGuardrailRequest,
+): { http: number; body: { status: string; message?: string; needsRestart?: boolean; policy?: string }; patched: boolean } {
+  const policy = reqBody?.policy;
+  if (policy !== "none" && policy !== "sample" && policy !== "module") {
+    return { http: 400, body: { status: "error", message: "policy must be none|sample|module" }, patched: false };
+  }
+
+  const cfg = readConfigFromDisk();
+
+  if (policy === "none") {
+    // Clear the policy entirely → no-op allow-all.
+    delete cfg.guardrails;
+    writeConfigToDisk(cfg);
+    return { http: 200, body: { status: "ok", needsRestart: true, policy: "none" }, patched: true };
+  }
+
+  if (policy === "sample") {
+    const allowUsers = cleanStrings(reqBody.allowUsers);
+    const denyKeywords = cleanStrings(reqBody.denyKeywords).map((s) => s.toLowerCase());
+    const approvalTools = cleanStrings(reqBody.approvalTools);
+    const approvers = cleanStrings(reqBody.approvers);
+    const auditSink = reqBody.auditSink === "http" ? "http" : "log";
+    const auditEndpoint = typeof reqBody.auditEndpoint === "string" ? reqBody.auditEndpoint.trim() : "";
+
+    if (auditSink === "http") {
+      if (!isHttpUrl(auditEndpoint)) {
+        return { http: 400, body: { status: "error", message: "auditSink=http は http(s) の endpoint が必要です" }, patched: false };
+      }
+    }
+
+    const config: Record<string, any> = {};
+    if (allowUsers.length) config.allowUsers = allowUsers;
+    if (denyKeywords.length) {
+      config.deny = [
+        {
+          contains: denyKeywords,
+          reason:
+            typeof reqBody.denyReason === "string" && reqBody.denyReason.trim()
+              ? reqBody.denyReason.trim()
+              : "危険な操作をブロックしました",
+        },
+      ];
+    }
+    if (approvalTools.length) {
+      config.requireApproval = [
+        {
+          tools: approvalTools,
+          ...(approvers.length ? { approvers } : {}),
+          reason:
+            typeof reqBody.approvalReason === "string" && reqBody.approvalReason.trim()
+              ? reqBody.approvalReason.trim()
+              : "書き込み操作には承認が必要です",
+        },
+      ];
+    }
+    config.audit = { sink: auditSink, ...(auditSink === "http" ? { endpoint: auditEndpoint } : {}) };
+
+    cfg.guardrails = { impl: "sample", config };
+    writeConfigToDisk(cfg);
+    return { http: 200, body: { status: "ok", needsRestart: true, policy: "sample" }, patched: true };
+  }
+
+  // policy === "module": external plugin specifier + raw JSON config.
+  const mv = validateModuleSpec(reqBody.module);
+  if (!mv.ok) {
+    return { http: 400, body: { status: "error", message: `invalid module: ${mv.reason}` }, patched: false };
+  }
+  if (reqBody.config !== undefined && (typeof reqBody.config !== "object" || reqBody.config === null || Array.isArray(reqBody.config))) {
+    return { http: 400, body: { status: "error", message: "config must be a JSON object" }, patched: false };
+  }
+  const block: Record<string, any> = { module: (reqBody.module as string).trim() };
+  if (reqBody.config && typeof reqBody.config === "object") block.config = reqBody.config;
+  cfg.guardrails = block;
+  writeConfigToDisk(cfg);
+  return { http: 200, body: { status: "ok", needsRestart: true, policy: "module" }, patched: true };
 }
 
 // ---- Toggle ----------------------------------------------------------------
