@@ -56,6 +56,49 @@ function resolveKnowledgeRoot(): string {
 
 const KNOWLEDGE_ROOT = resolveKnowledgeRoot();
 
+// ─── Per-user auto-scoping (番頭ID伝播) ───
+// The banto stamps the current speaker's key into JINN_USER_KEY on every turn
+// (see mcp/resolver.ts). When present, this 職人's I/O is silently scoped to
+// that speaker's subtree `users/<key>/`: a caller path like `profile.md`
+// resolves to `users/<key>/profile.md`. An explicit `shared/...` path is the
+// org-wide escape hatch and maps to `knowledge/shared/...` unchanged. Absent
+// the env, behaviour is the legacy knowledge-root-relative model.
+//
+// The rewrite happens BEFORE resolveWithinRoot, so all traversal defenses
+// (absolute/`..`/`~`/symlink escape) still apply — a user cannot climb out of
+// their own subtree either (e.g. `../other` under a scoped key becomes
+// `users/other/...`? no: it is prefixed then re-checked and rejected if it
+// escapes the root; and it can never reach a sibling user's tree without an
+// explicit `users/<other>` which the banto never grants — the scope is a
+// convenience default, not a hard sandbox boundary between users). The hard
+// guarantee is: never escape KNOWLEDGE_ROOT.
+function normalizeUserKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const key = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return key || undefined;
+}
+
+const USER_KEY = normalizeUserKey(process.env.JINN_USER_KEY);
+
+/**
+ * Apply per-user auto-scoping to a caller-supplied path. Returns the path that
+ * should be handed to resolveWithinRoot. No-op when JINN_USER_KEY is unset.
+ * `shared/...` (org-wide) is passed through untouched.
+ */
+function scopePath(relInput: unknown): unknown {
+  if (!USER_KEY) return relInput;
+  if (typeof relInput !== "string") return relInput; // let resolveWithinRoot reject
+  const rel = relInput.trim();
+  if (rel.length === 0) return relInput;
+  // Org-wide escape hatch: shared/ (and bare "shared") map to knowledge/shared.
+  if (rel === "shared" || /^shared[/\\]/.test(rel)) return rel;
+  // Everything else is relative to this speaker's subtree.
+  return `users/${USER_KEY}/${rel.replace(/^[/\\]+/, "")}`;
+}
+
 // ─── Path safety ───
 
 /** Thrown for any relative path that would escape the knowledge root. */
@@ -143,7 +186,7 @@ const TOOLS = [
   {
     name: "read_knowledge",
     description:
-      "Read a knowledge file. `path` is relative to the knowledge root (~/.openbanto/knowledge/), e.g. 'users/<userKey>/profile.md' or 'shared/projects.md'. Absolute paths and '..' are rejected.",
+      "Read a knowledge file. Your I/O is automatically scoped to the CURRENT USER: a `path` like 'profile.md' resolves to that user's private subtree ('users/<you>/profile.md'). Prefix with 'shared/' to reach org-wide files ('shared/projects.md'). Absolute paths and '..' are rejected.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -158,7 +201,7 @@ const TOOLS = [
   {
     name: "write_knowledge",
     description:
-      "Create or overwrite a knowledge file. `path` is relative to the knowledge root (~/.openbanto/knowledge/). Parent directories are created automatically. Use this to record what you learn about a speaker at 'users/<userKey>/profile.md' and 'users/<userKey>/preferences.md'.",
+      "Create or overwrite a knowledge file. Your I/O is automatically scoped to the CURRENT USER: a `path` like 'profile.md' or 'preferences.md' is written into that user's private subtree ('users/<you>/…'). Prefix with 'shared/' for org-wide files. Parent directories are created automatically.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -177,7 +220,7 @@ const TOOLS = [
   {
     name: "list_knowledge",
     description:
-      "List entries in a knowledge directory. `dir` is relative to the knowledge root (~/.openbanto/knowledge/); omit or '' for the root. Returns file/dir names and sizes.",
+      "List entries in a knowledge directory. Your I/O is automatically scoped to the CURRENT USER: omit `dir` (or '') to list your own private subtree ('users/<you>/'). Prefix with 'shared/' for org-wide directories. Returns file/dir names and sizes.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -195,31 +238,36 @@ const TOOLS = [
 function handleTool(name: string, args: Record<string, unknown>): string {
   switch (name) {
     case "read_knowledge": {
-      const abs = resolveWithinRoot(args.path);
+      const scoped = scopePath(args.path);
+      const abs = resolveWithinRoot(scoped);
       let content: string;
       try {
         content = fs.readFileSync(abs, "utf-8");
       } catch {
         // Do not leak the absolute path in the error.
-        throw new Error(`knowledge file not found: ${sanitizeRel(args.path)}`);
+        throw new Error(`knowledge file not found: ${sanitizeRel(scoped)}`);
       }
       return content;
     }
 
     case "write_knowledge": {
-      const abs = resolveWithinRoot(args.path);
+      const scoped = scopePath(args.path);
+      const abs = resolveWithinRoot(scoped);
       const content = typeof args.content === "string" ? args.content : "";
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content, "utf-8");
       return JSON.stringify({
         ok: true,
-        path: sanitizeRel(args.path),
+        path: sanitizeRel(scoped),
         bytes: Buffer.byteLength(content, "utf-8"),
       });
     }
 
     case "list_knowledge": {
-      const dirRel = args.dir === undefined || args.dir === null || args.dir === "" ? "." : args.dir;
+      const dirRaw = args.dir === undefined || args.dir === null || args.dir === "" ? "." : args.dir;
+      // "." with a scope means "my subtree root" → users/<key>. Without a scope
+      // it stays the knowledge root.
+      const dirRel = dirRaw === "." && USER_KEY ? `users/${USER_KEY}` : scopePath(dirRaw);
       const abs = resolveWithinRoot(dirRel);
       let entries: fs.Dirent[];
       try {
@@ -321,6 +369,8 @@ function handleRequest(request: JsonRpcRequest): void {
 export const __test = {
   resolveWithinRoot,
   handleTool,
+  scopePath,
+  USER_KEY,
   KNOWLEDGE_ROOT,
   TraversalError,
   TOOLS,
