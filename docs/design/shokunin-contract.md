@@ -88,3 +88,9 @@ identity が無ければ注入しない（＝後方互換）。
 関連：`docs/design/tools-mcp-wiring.md`（MCP 配線）、
 `docs/design/per-user-knowledge.md`（per-user 知識モデル）、
 `docs/upstream-port/BANTO-PORT-PLAN.md` §P。
+
+## 図（ID伝播＆per-user強制）
+
+![id propagation](./id-propagation.drawio.png)
+
+> `.drawio.png` は閲覧用PNG＋draw.io で開けば編集できる mxfile 埋め込み。
