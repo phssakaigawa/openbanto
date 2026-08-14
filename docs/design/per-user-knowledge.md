@@ -81,3 +81,30 @@ MCP server (scoping, traversal defense, default-on wiring).
 - `mcp/__tests__/knowledge-server.test.ts` — traversal defense + IO round-trip.
 - `mcp/__tests__/resolver.test.ts` — knowledge server present by default / omitted
   when disabled.
+
+## Identity propagation → automatic per-user scoping (番頭ID伝播)
+
+Per-user knowledge no longer depends only on the system-prompt paths. The banto
+now propagates the speaker's identity to the knowledge 職人 (and every other MCP
+server) **every turn**, and the knowledge server auto-scopes on it:
+
+- `mcp/resolver.ts` injects `JINN_USER_KEY` (plus `JINN_USER_ID` / `JINN_USER_NAME`
+  / `JINN_CONNECTOR` / `JINN_CHANNEL`) into the knowledge server's stdio `env`.
+  `sessions/manager.ts` derives `userKey` the same way `context.ts` does
+  (SlackID-preferred → normalized name).
+- With `JINN_USER_KEY` set, `knowledge-server.ts` makes **`users/<key>/` the
+  default root**: a caller path `profile.md` → `users/<key>/profile.md`,
+  `preferences.md` → `users/<key>/preferences.md`. The engine no longer has to
+  spell out the `users/<userKey>/` prefix — it just writes `profile.md` and lands
+  in the right person's subtree.
+- `shared/…` is the org-wide escape hatch (maps to `knowledge/shared/…`).
+- Without `JINN_USER_KEY` (cron / older callers) behaviour is the legacy
+  knowledge-root-relative model — backward compatible.
+- **Traversal defense is unchanged**: absolute / `..` / `~` / root-escaping
+  symlinks are still rejected, and a scoped user still cannot escape
+  `KNOWLEDGE_ROOT`. The rewrite happens *before* `resolveWithinRoot`.
+
+The tool descriptions now state "your I/O is automatically scoped to the current
+user", so per-user correctness holds even if the engine forgets the path
+convention. See `docs/design/shokunin-contract.md` for the identity contract that
+extends this to all 職人 (calendar, ledger, minutes, …), not just knowledge.

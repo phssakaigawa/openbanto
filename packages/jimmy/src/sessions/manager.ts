@@ -20,7 +20,7 @@ import {
   type UpdateSessionFields,
 } from "./registry.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
-import { buildContext } from "./context.js";
+import { buildContext, userKey } from "./context.js";
 import { normalizeDelivery, normalizeTurns, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
 import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "./origin-delivery.js";
 import { SessionQueue } from "./queue.js";
@@ -431,6 +431,17 @@ export class SessionManager {
 
     try {
       const meta = msg.transportMeta ?? {};
+      // Identity of THIS turn's speaker, propagated to every MCP 職人 so their
+      // persistent I/O is scoped per-user. userKey mirrors context.ts's derivation
+      // (SlackID-preferred → normalized name). See docs/design/shokunin-contract.md.
+      const speakerIdentity = {
+        userId: msg.userId || undefined,
+        userKey: userKey({
+          speakerSlackId: (meta.speakerSlackId as string) || undefined,
+          speakerName: (meta.speakerName as string) || undefined,
+        }),
+        userName: msg.user || undefined,
+      };
       const systemPrompt = buildContext({
         source: session.source,
         channel: msg.channel,
@@ -471,6 +482,7 @@ export class SessionManager {
           connector: connector.name,
           channel: target.channel,
           thread: target.thread || target.messageTs,
+          ...speakerIdentity,
         });
         if (Object.keys(mcpConfig.mcpServers).length > 0) {
           mcpConfigPath = writeMcpConfigFile(mcpConfig, session.id);
@@ -554,6 +566,7 @@ export class SessionManager {
                 connector: connector.name,
                 channel: target.channel,
                 thread: target.thread || target.messageTs,
+                ...speakerIdentity,
               }).mcpServers,
             );
           } catch {

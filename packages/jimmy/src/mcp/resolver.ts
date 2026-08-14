@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { McpGlobalConfig, McpServerConfig, McpServerUrlConfig, Employee } from "../shared/types.js";
+import type {
+  McpGlobalConfig,
+  McpServerConfig,
+  McpServerStdioConfig,
+  McpServerUrlConfig,
+  Employee,
+} from "../shared/types.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 
@@ -13,6 +19,16 @@ export interface McpSessionContext {
   connector?: string;
   channel?: string;
   thread?: string;
+  /**
+   * Identity of the Slack (or other connector) user who spoke THIS turn. The
+   * banto injects this into every MCP server (shokunin/職人) so each tool
+   * scopes its persistent I/O per-user. See `docs/design/shokunin-contract.md`.
+   */
+  userId?: string;
+  /** Filesystem-safe user key (SlackID-preferred, see sessions/context.ts userKey). */
+  userKey?: string;
+  /** Human display name of the speaker (msg.user). */
+  userName?: string;
 }
 
 /**
@@ -176,7 +192,69 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
     }
   }
 
+  // ── Per-turn identity injection (番頭ID伝播) ──────────────────
+  // The banto is the authority on who is speaking this turn. Stamp that
+  // identity into EVERY MCP server (職人) so each tool scopes its persistent
+  // I/O per-user. stdio servers receive it as JINN_USER_* env; URL servers as
+  // X-Banto-* headers. Static auth (Authorization, existing env) is preserved;
+  // only these well-known keys are overwritten by the banto. When no identity
+  // is present (cron, tests, older callers) nothing is injected — fully
+  // backward compatible. See docs/design/shokunin-contract.md.
+  injectIdentity(servers, sessionContext);
+
   return servers;
+}
+
+/** stdio env keys the banto stamps onto every 職人 process. */
+function identityEnv(ctx?: McpSessionContext): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (!ctx) return env;
+  if (ctx.userId) env.JINN_USER_ID = ctx.userId;
+  if (ctx.userKey) env.JINN_USER_KEY = ctx.userKey;
+  if (ctx.userName) env.JINN_USER_NAME = ctx.userName;
+  if (ctx.connector) env.JINN_CONNECTOR = ctx.connector;
+  if (ctx.channel) env.JINN_CHANNEL = ctx.channel;
+  return env;
+}
+
+/** URL header keys the banto stamps onto every HTTP 職人 request. */
+function identityHeaders(ctx?: McpSessionContext): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (!ctx) return headers;
+  if (ctx.userId) headers["X-Banto-User-Id"] = ctx.userId;
+  if (ctx.userKey) headers["X-Banto-User-Key"] = ctx.userKey;
+  if (ctx.userName) headers["X-Banto-User-Name"] = ctx.userName;
+  if (ctx.connector) headers["X-Banto-Connector"] = ctx.connector;
+  if (ctx.channel) headers["X-Banto-Channel"] = ctx.channel;
+  return headers;
+}
+
+/**
+ * Merge the current speaker's identity into every resolved MCP server. The
+ * banto's values are authoritative for the well-known keys (they overwrite),
+ * but pre-existing env / static auth headers are otherwise preserved. A no-op
+ * when the session carries no identity (backward compatible).
+ */
+function injectIdentity(
+  servers: Record<string, McpServerConfig>,
+  ctx?: McpSessionContext,
+): void {
+  const env = identityEnv(ctx);
+  const headers = identityHeaders(ctx);
+  if (Object.keys(env).length === 0 && Object.keys(headers).length === 0) return;
+
+  for (const name of Object.keys(servers)) {
+    const server = servers[name];
+    // URL-based (HTTP/SSE) 職人 → X-Banto-* headers, keep Authorization etc.
+    if ("url" in server && (server as McpServerUrlConfig).url) {
+      const url = server as McpServerUrlConfig;
+      url.headers = { ...(url.headers ?? {}), ...headers };
+      continue;
+    }
+    // stdio 職人 → JINN_USER_* env, keep existing env.
+    const stdio = server as McpServerStdioConfig;
+    stdio.env = { ...(stdio.env ?? {}), ...env };
+  }
 }
 
 /**

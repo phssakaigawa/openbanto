@@ -166,3 +166,33 @@ as `{role:"tool"}` messages) until the model returns a final answer. See
 `engines/openai.ts` + `mcp/tool-bridge.ts`. `bob` does not support MCP. The UI
 surfaces this as a hint so operators do not expect a registered server to take
 effect under an engine that cannot call it.
+
+### Per-turn identity propagation (番頭ID伝播)
+
+`resolveMcpServers(globalMcp, employee, sessionContext)` also stamps the **current
+speaker's identity** into **every** resolved MCP server, so each 職人 (shokunin)
+can scope its persistent I/O per-user. `McpSessionContext` carries `userId`
+(connector-native, e.g. Slack `U…`), `userKey` (filesystem-safe, from
+`sessions/context.ts` `userKey()`), and `userName` (display), alongside the
+existing `connector`/`channel`/`thread`. `sessions/manager.ts` fills these from
+`msg.userId` / transport meta / `msg.user` at **both** `resolveMcpServers` call
+sites (mcpConfigPath + guardrail toolbelt).
+
+Injection is transport-aware:
+
+- **stdio** (`command`/`args`/`env`) → merged into `env`:
+  `JINN_USER_ID`, `JINN_USER_KEY`, `JINN_USER_NAME`, `JINN_CONNECTOR`,
+  `JINN_CHANNEL` (only keys with a value). Existing `env` is preserved; these
+  well-known keys are overwritten by the banto (authority).
+- **url** (`type:"sse"` / `headers`) → merged into `headers`:
+  `X-Banto-User-Id`, `X-Banto-User-Key`, `X-Banto-User-Name`,
+  `X-Banto-Connector`, `X-Banto-Channel`. **Static auth headers
+  (`Authorization`, …) are preserved** — only `X-Banto-*` are added.
+
+When the session carries **no identity** (cron, internal calls, older callers)
+nothing user-scoped is injected — fully backward compatible. Because MCP is
+resolved **per turn**, the identity always reflects that turn's speaker. The
+built-in **knowledge** 職人 is the reference consumer: given `JINN_USER_KEY` it
+auto-scopes `read/write/list_knowledge` to `users/<key>/`. See
+`docs/design/shokunin-contract.md` for the full env/header contract and the
+per-user requirement all 職人 must honor.
