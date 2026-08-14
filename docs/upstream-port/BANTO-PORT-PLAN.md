@@ -152,6 +152,18 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 | WebUI（ボタン） | `packages/web/src/app/plugins/page.tsx`（`RestartBantoButton`、ヘッダの 再読込 隣、`manageUi:true` 時のみ）+ `lib/api.ts`（`restartDaemon`＋`pollDaemonHealthy`） | 確認ダイアログ→POST→「再起動中…」→`/api/status` を ~1.5s 間隔 poll（down 中の fetch 失敗は握り潰しリトライ）→200 で「復帰しました」→データ再取得。連打防止（busy 中 disabled）・poll timeout/失敗はインラインメッセージ |
 | 単体テスト | `gateway/__tests__/self-restart.test.ts`（single-flight＋遅延 SIGTERM を注入 kill で検証）+ `gateway/__tests__/admin-restart-endpoint.test.ts`（非admin→403・manageUi 無効→403・admin→`restarting`・in-flight→409、self-restart は mock） | **プロセスを実際に殺さない**（fake timer＋注入 kill／self-restart.js を mock）。上流が req/socket 形やゲートを変えたら追随 |
 
+### M. MCP サーバ登録の Web 設定フォーム（職人/tools、OpenBanto 独自）
+§I の Gated 管理 UI に **MCP サーバ（`config.mcp.custom.<name>`）の UI 登録**を足したもの。stdio（`command`/`args`/`env`）と URL（HTTP/SSE：`type:"sse"` 固定・`url`・認証は `headers`）の 2 トランスポートを一覧/追加/編集/削除/enabled トグルできる。**MCP は per-turn 解決**（`mcp/resolver.ts` `resolveMcpServers`）なので、config 書き込み後は **config watcher →`sessionManager.setConfig` →次ターンで反映**＝**再起動不要（`needsRestart:false`）**。ゲート・監査は §I の `/api/plugins*` と同一。詳細は `docs/design/tools-mcp-wiring.md` § UI 登録。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| summary マスク（新規） | `gateway/plugins-api.ts` `summarizeMcpServers`（`PluginsSummary.mcpServers[]` に追加） | **★headers/env の値と URL 内トークンを返さない**（`hasHeaders`/`hasEnv` の bool のみ。`url`/`command` は表示可）。上流が summary 形を変えたら追随 |
+| upsert/削除（新規・純粋関数分離） | `gateway/plugins-api.ts` `buildMcpBlock`（純粋：バリデーション＋secret 据置マージ）/ `mergeSecretMap`（空欄＝既存維持）/ `upsertMcpServer` / `deleteMcpServer` | **★secret 据置**：編集時 headers/env 値が空欄なら既存を維持（非空で上書き、省略で削除）。**値をレスポンス・監査に出さない**。`name` は `[a-z0-9-]+`、URL は http(s)、stdio は command 非空。**`pnpm add`/`execFile` 不使用**（config 配線のみ） |
+| ルータ配線 | `gateway/api.ts`（`POST /api/plugins/mcp`＝upsert・`action:"delete"`可 / `DELETE /api/plugins/mcp?name=…`） | **`requirePluginAdmin` 必須**（§I と同一ゲート）＋`auditPluginAction({action:"mcp.upsert"|"mcp.delete", name, transport})`（**transport のみ・値なし**）。patched 後に `context.config=getConfig()` で GET を即時反映 |
+| resolver enabled 尊重 | `mcp/resolver.ts` `buildAvailableServers`（`if (serverConfig.enabled === false) continue;`） | **既存の skip をそのまま利用**（無効サーバは登録しない）。上流が custom 解決を変えたら enabled skip が消えていないか確認 |
+| WebUI（タブ/フォーム） | `packages/web/src/app/plugins/page.tsx`（`McpSection`/`McpServerForm`/`SecretKvEditor`、MCP タブ）+ `lib/api.ts`（`upsertMcpServer`/`deleteMcpServer`＋`McpServerSummary`/`mcpServers`） | 信頼警告バナー＋**エンジン対応ヒント**（claude 消費・bob 非対応・openai は tool-call 実装後）。secret 欄は password・編集時は空欄プレースホルダで「設定済」表示（prefill しない） |
+| 単体テスト | `gateway/__tests__/plugins-api.test.ts`（`mergeSecretMap` 据置/上書き/削除・`buildMcpBlock` バリデーション＋secret 据置・`summarizeMcpServers` マスク＝serialize に秘匿値が出ないこと） | disk I/O を伴わない純粋関数を検証（`upsertMcpServer` の read/write は薄いラッパ） |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
@@ -164,6 +176,7 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 6. `context.ts` の番頭 identity + 「ご記帳」ONBOARDING
 6b. **★ガードレール hook が turn 実行路から外れていないか**（`sessions/manager.ts` `runSession()` の `beforeTurn`=budget check 隣・`engine.run` 直前 / `afterTurn`=主経路の `engine.run` 復帰後 が残っているか。`gateway/server.ts` が `resolveGuardrail().create()` を SessionManager 第4引数に注入しているか。未設定時に no-op「allow-all」で挙動不変か）
 6c. **★プラグイン管理UIのセキュリティ gate が生きているか**（`gateway/plugins-api.ts` `requirePluginAdmin`＝`manageUi` flag→group 再チェック→loopback fallback / `validateModuleSpec` の npm・git+https 限定＋shell メタ拒否 / `pnpm add` が **execFile（シェル非経由）** のままか。`gateway/api.ts` `/api/plugins/*` 各ルートが gate を通しているか。`PUT /api/config` `KNOWN_KEYS` に `plugins`/`guardrails` が残っているか）
+6e. **★MCP サーバ登録フォームが生きているか**（`gateway/plugins-api.ts` `summarizeMcpServers` が headers/env 値・URL 内トークンをマスク＝`hasHeaders`/`hasEnv` bool のみ返すか / `buildMcpBlock`+`mergeSecretMap` が編集時 secret 据置（空欄＝維持）か / `upsertMcpServer` が **`pnpm add`/`execFile` を叩かず** config 配線のみか。`gateway/api.ts` の `POST`/`DELETE /api/plugins/mcp` が `requirePluginAdmin` を通し監査に**値を出さない**か。`mcp/resolver.ts` が `enabled:false` を skip したままか。反映は per-turn＝`needsRestart:false`）
 6d. **★汎用 OpenAI 互換エンジンが生きているか**（`engines/registry.ts` の impl 解決＝`resolveEngine(name, block)` 第3経路・`IMPL_PLUGINS.openai`・`engineImplOf` が残っているか。`gateway/server.ts` の engine map 列挙が `impl` を拾うか。`shared/models.ts` `addImplEngineEntries` で /model picker に出るか。`gateway/plugins-api.ts` `upsertOpenAiEngine` が **pnpm add を叩かず** apiKey を据置更新・非漏洩のままか。`openai.ts` が abort→`interrupted`・apiKey 非ログか）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）

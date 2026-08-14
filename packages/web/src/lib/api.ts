@@ -76,12 +76,27 @@ export interface PluginEntry {
   };
 }
 
+/** Non-secret view of one custom MCP server (config.mcp.custom.<name>). Header
+ *  and env values (and any URL-embedded token) are never included — only the
+ *  boolean presence hasHeaders / hasEnv. The url/command are shown as-is. */
+export interface McpServerSummary {
+  name: string;
+  transport: "stdio" | "url";
+  enabled: boolean;
+  url?: string;
+  command?: string;
+  hasHeaders: boolean;
+  hasEnv: boolean;
+}
+
 export interface PluginsSummary {
   manageUi: boolean;
   adminGroup: string;
   engines: PluginEntry[];
   connectors: PluginEntry[];
   guardrails: PluginEntry[];
+  /** Custom MCP servers (config.mcp.custom) — masked (no secret values). */
+  mcpServers: McpServerSummary[];
 }
 
 const BASE =
@@ -238,6 +253,29 @@ export const api = {
     post<{ status: string; needsRestart?: boolean; message?: string; policy?: string }>(
       "/api/plugins/guardrail",
       data,
+    ),
+  /** Create/update a custom MCP server (config.mcp.custom.<name>). MCP config is
+   *  resolved per-turn, so no restart — the change reflects on the next turn.
+   *  Header/env values are write-only: omit or leave blank on an edit to keep
+   *  the stored secret. Values are never echoed back. */
+  upsertMcpServer: (data: {
+    name: string;
+    transport: "stdio" | "url";
+    enabled?: boolean;
+    url?: string;
+    headers?: Record<string, string>;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }) =>
+    post<{ status: string; needsRestart?: boolean; message?: string; created?: boolean }>(
+      "/api/plugins/mcp",
+      data,
+    ),
+  /** Delete a custom MCP server by name. */
+  deleteMcpServer: (name: string) =>
+    del<{ status: string; needsRestart?: boolean; message?: string; deleted?: boolean }>(
+      `/api/plugins/mcp?name=${encodeURIComponent(name)}`,
     ),
   /** Admin-only: ask the daemon to self-restart. It replies 200
    *  {restarting:true} and then (after a short delay) SIGTERMs itself; systemd

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, pollDaemonHealthy, type PluginEntry, type PluginsSummary } from "@/lib/api";
+import { api, pollDaemonHealthy, type McpServerSummary, type PluginEntry, type PluginsSummary } from "@/lib/api";
 import { PageLayout } from "@/components/page-layout";
 import { useBreadcrumbs } from "@/context/breadcrumb-context";
 import { Card, CardContent } from "@/components/ui/card";
@@ -119,6 +119,7 @@ export default function PluginsPage() {
                 <TabsTrigger value="engine">エンジン ({data.engines.length})</TabsTrigger>
                 <TabsTrigger value="connector">コネクタ ({data.connectors.length})</TabsTrigger>
                 <TabsTrigger value="guardrail">ガードレール ({data.guardrails.length})</TabsTrigger>
+                <TabsTrigger value="mcp">MCP ({(data.mcpServers ?? []).length})</TabsTrigger>
               </TabsList>
 
               <TabsContent value="engine">
@@ -131,6 +132,9 @@ export default function PluginsPage() {
               <TabsContent value="guardrail">
                 <PluginList type="guardrail" items={data.guardrails} onChanged={load} />
                 {data.manageUi && <GuardrailSection current={data.guardrails[0]} onChanged={load} />}
+              </TabsContent>
+              <TabsContent value="mcp">
+                <McpSection servers={data.mcpServers ?? []} canEdit={data.manageUi} onChanged={load} />
               </TabsContent>
             </Tabs>
 
@@ -951,6 +955,455 @@ function AddPluginForm({ onInstalled }: { onInstalled: () => void }) {
                 {result.stderr}
               </pre>
             )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const KV_INPUT_CLS =
+  "w-full rounded-[var(--radius-md,12px)] border border-border bg-[var(--bg-secondary)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-body)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]";
+
+/** Editable list of key→value pairs where the VALUE is a secret (password
+ *  field). On edit, a stored secret is represented by a blank value with the
+ *  "設定済" hint; leaving it blank preserves the server-side value. */
+type KvPair = { key: string; value: string; hadSecret: boolean };
+
+function SecretKvEditor({
+  label,
+  hint,
+  pairs,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  pairs: KvPair[];
+  onChange: (pairs: KvPair[]) => void;
+}) {
+  const update = (i: number, patch: Partial<KvPair>) =>
+    onChange(pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+  const add = () => onChange([...pairs, { key: "", value: "", hadSecret: false }]);
+  const remove = (i: number) => onChange(pairs.filter((_, idx) => idx !== i));
+
+  return (
+    <div>
+      <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+        {label}
+        {hint && <span className="text-[var(--text-quaternary)]"> {hint}</span>}
+      </label>
+      <div className="flex flex-col gap-[var(--space-2)]">
+        {pairs.map((p, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              className={KV_INPUT_CLS}
+              value={p.key}
+              onChange={(e) => update(i, { key: e.target.value })}
+              placeholder="KEY"
+              autoComplete="off"
+            />
+            <input
+              className={KV_INPUT_CLS}
+              type="password"
+              value={p.value}
+              onChange={(e) => update(i, { value: e.target.value })}
+              placeholder={p.hadSecret ? "（設定済・変更時のみ入力）" : "value"}
+              autoComplete="new-password"
+            />
+            <Button type="button" variant="ghost" size="sm" onClick={() => remove(i)}>
+              削除
+            </Button>
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm" onClick={add}>
+          + 行を追加
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** MCP servers (職人/tools) list + add/edit form. Consumed per-turn by the
+ *  engine, so changes reflect on the NEXT turn (no restart). */
+function McpSection({
+  servers,
+  canEdit,
+  onChanged,
+}: {
+  servers: McpServerSummary[];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState<McpServerSummary | "new" | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function toggle(s: McpServerSummary, enabled: boolean) {
+    setBusy(s.name);
+    setMsg(null);
+    try {
+      // enabled toggle rides on the upsert endpoint; secrets are preserved
+      // server-side (we send no header/env values, so blanks keep the stored).
+      await api.upsertMcpServer({ name: s.name, transport: s.transport, enabled });
+      onChanged();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(s: McpServerSummary) {
+    if (!window.confirm(`MCP サーバ "${s.name}" を削除しますか？`)) return;
+    setBusy(s.name);
+    setMsg(null);
+    try {
+      await api.deleteMcpServer(s.name);
+      onChanged();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mt-[var(--space-4)]">
+      {/* Trust warning — MCP servers hand external TOOLS to the agent. */}
+      <div
+        className="mb-[var(--space-4)] flex gap-2 rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption2)] text-[var(--text-secondary)]"
+        style={{
+          background: "color-mix(in srgb, var(--system-orange,#f59e0b) 10%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--system-orange,#f59e0b) 30%, transparent)",
+        }}
+      >
+        <AlertTriangle size={16} className="mt-0.5 shrink-0 text-[var(--system-orange,#f59e0b)]" />
+        <span>
+          MCP サーバは<strong>外部ツールをエージェントに与えます</strong>。stdio
+          はローカルで子プロセス（command）を起動し、URL は外部エンドポイントを呼びます。信頼できるサーバのみを登録してください。
+        </span>
+      </div>
+
+      {/* Engine-support hint — which engine actually CONSUMES MCP tools. */}
+      <div
+        className="mb-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption2)] text-[var(--text-secondary)]"
+        style={{ background: "color-mix(in srgb, var(--accent) 8%, transparent)" }}
+      >
+        MCP ツールを呼ぶのは<strong>エンジン</strong>です。現状 <code>claude</code> エンジンが
+        stdio / HTTP(SSE) MCP を消費します。<code>bob</code> は非対応、<code>AiDEA</code> /{" "}
+        <code>Kannon</code>（openai 互換）は tool-call 実装後に対応します。
+      </div>
+
+      {msg && (
+        <div
+          className="mb-[var(--space-3)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)] text-[var(--system-red)]"
+          style={{ background: "color-mix(in srgb, var(--system-red) 10%, transparent)" }}
+        >
+          {msg}
+        </div>
+      )}
+
+      <div className="mb-[var(--space-3)] flex items-center justify-between">
+        <h3 className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+          MCP サーバ（職人 / tools）
+        </h3>
+        {canEdit && editing === null && (
+          <Button variant="outline" size="sm" onClick={() => setEditing("new")}>
+            MCP サーバを追加
+          </Button>
+        )}
+      </div>
+
+      {servers.length === 0 ? (
+        <p className="p-[var(--space-6)] text-center text-[length:var(--text-body)] text-[var(--text-tertiary)]">
+          登録済みの MCP サーバはありません
+        </p>
+      ) : (
+        <div className="flex flex-col gap-[var(--space-2)]">
+          {servers.map((s) => (
+            <Card key={s.name}>
+              <CardContent className="flex items-center justify-between gap-4 p-[var(--space-4)]">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+                      {s.name}
+                    </span>
+                    <Badge variant="secondary">{s.transport === "url" ? "URL(SSE)" : "stdio"}</Badge>
+                    {s.hasHeaders && <Badge variant="outline">headers 設定済</Badge>}
+                    {s.hasEnv && <Badge variant="outline">env 設定済</Badge>}
+                  </div>
+                  <p className="mt-1 truncate text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">
+                    {s.transport === "url" ? s.url : s.command}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <label className="flex items-center gap-2 text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                    <input
+                      type="checkbox"
+                      checked={s.enabled}
+                      disabled={!canEdit || busy === s.name}
+                      onChange={(e) => toggle(s, e.target.checked)}
+                    />
+                    有効
+                  </label>
+                  {canEdit && (
+                    <>
+                      <Button variant="outline" size="sm" onClick={() => setEditing(s)}>
+                        編集
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => remove(s)} disabled={busy === s.name}>
+                        削除
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {canEdit && editing !== null && (
+        <div className="mt-[var(--space-4)]">
+          <McpServerForm
+            entry={editing === "new" ? null : editing}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              setEditing(null);
+              onChanged();
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function McpServerForm({
+  entry,
+  onClose,
+  onSaved,
+}: {
+  entry: McpServerSummary | null; // null = create
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = entry !== null;
+  const [name, setName] = useState(entry?.name ?? "");
+  const [transport, setTransport] = useState<"url" | "stdio">(entry?.transport ?? "url");
+  const [enabled, setEnabled] = useState(entry?.enabled ?? true);
+  // URL transport
+  const [url, setUrl] = useState(entry?.url ?? "");
+  // On edit, seed one blank "設定済" header row so the operator sees the secret
+  // exists; leaving it blank preserves it. The key isn't surfaced by the
+  // summary, so headers are re-entered by key on edit.
+  const [headers, setHeaders] = useState<KvPair[]>(
+    entry?.hasHeaders ? [{ key: "", value: "", hadSecret: true }] : [],
+  );
+  // stdio transport
+  const [command, setCommand] = useState(entry?.command ?? "");
+  const [argsText, setArgsText] = useState("");
+  const [env, setEnv] = useState<KvPair[]>(
+    entry?.hasEnv ? [{ key: "", value: "", hadSecret: true }] : [],
+  );
+
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ kind: "ok" } | { kind: "error"; message: string } | null>(null);
+
+  const inputCls = KV_INPUT_CLS;
+
+  function kvToObject(pairs: KvPair[]): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const p of pairs) {
+      const k = p.key.trim();
+      if (!k) continue;
+      out[k] = p.value; // blank value → server preserves stored secret
+    }
+    return out;
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setResult(null);
+
+    const nm = name.trim();
+    if (!/^[a-z0-9-]+$/.test(nm)) {
+      setResult({ kind: "error", message: "名前は [a-z0-9-]+ である必要があります" });
+      return;
+    }
+    if (transport === "url" && !/^https?:\/\//.test(url.trim())) {
+      setResult({ kind: "error", message: "url は http(s):// である必要があります" });
+      return;
+    }
+    if (transport === "stdio" && !command.trim()) {
+      setResult({ kind: "error", message: "stdio は command が必須です" });
+      return;
+    }
+
+    // Split args on newline or comma.
+    const args = argsText
+      .split(/[\n,]/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+    setSubmitting(true);
+    try {
+      const res = await api.upsertMcpServer(
+        transport === "url"
+          ? {
+              name: nm,
+              transport: "url",
+              enabled,
+              url: url.trim(),
+              headers: kvToObject(headers),
+            }
+          : {
+              name: nm,
+              transport: "stdio",
+              enabled,
+              command: command.trim(),
+              ...(args.length ? { args } : {}),
+              env: kvToObject(env),
+            },
+      );
+      if (res.status === "ok") {
+        setResult({ kind: "ok" });
+        onSaved();
+      } else {
+        setResult({ kind: "error", message: res.message || "保存に失敗しました" });
+      }
+    } catch (err) {
+      setResult({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-[var(--space-5)]">
+        <div className="mb-[var(--space-4)] flex items-center justify-between">
+          <h4 className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+            {isEdit ? `MCP サーバを編集: ${entry!.name}` : "MCP サーバを追加"}
+          </h4>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            閉じる
+          </Button>
+        </div>
+        <form onSubmit={submit} className="flex flex-col gap-[var(--space-4)]">
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              名前 (識別子, [a-z0-9-]+)
+            </label>
+            <input
+              className={inputCls}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-tools"
+              disabled={isEdit}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+              トランスポート
+            </label>
+            <select
+              value={transport}
+              onChange={(e) => setTransport(e.target.value as "url" | "stdio")}
+              className={inputCls}
+              disabled={isEdit}
+            >
+              <option value="url">URL（HTTP / SSE リモート）</option>
+              <option value="stdio">stdio（ローカル子プロセス）</option>
+            </select>
+          </div>
+
+          {transport === "url" ? (
+            <>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  url (http(s)://)
+                </label>
+                <input
+                  className={inputCls}
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://mcp.example.com/sse"
+                  required
+                />
+              </div>
+              <SecretKvEditor
+                label="headers（認証ヘッダ, 値は秘匿）"
+                hint={entry?.hasHeaders ? "（設定済・空欄なら維持）" : undefined}
+                pairs={headers}
+                onChange={setHeaders}
+              />
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  command
+                </label>
+                <input
+                  className={inputCls}
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  placeholder="npx"
+                  required
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+                  args（カンマ または 改行区切り, 任意）
+                </label>
+                <textarea
+                  className={`${inputCls} font-mono min-h-[72px]`}
+                  value={argsText}
+                  onChange={(e) => setArgsText(e.target.value)}
+                  placeholder={"-y\n@acme/mcp-server"}
+                />
+              </div>
+              <SecretKvEditor
+                label="env（環境変数, 値は秘匿）"
+                hint={entry?.hasEnv ? "（設定済・空欄なら維持）" : undefined}
+                pairs={env}
+                onChange={setEnv}
+              />
+            </>
+          )}
+
+          <label className="flex items-center gap-2 text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            有効
+          </label>
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "保存中..." : isEdit ? "更新" : "追加"}
+            </Button>
+            <span className="text-[length:var(--text-caption2)] text-[var(--text-quaternary)]">
+              次のターンから反映されます（再起動不要）
+            </span>
+          </div>
+        </form>
+
+        {result?.kind === "ok" && (
+          <div
+            className="mt-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)]"
+            style={{ background: "color-mix(in srgb, var(--system-green,#22c55e) 12%, transparent)", color: "var(--text-secondary)" }}
+          >
+            保存しました。次のターンから反映されます。
+          </div>
+        )}
+        {result?.kind === "error" && (
+          <div
+            className="mt-[var(--space-4)] rounded-[var(--radius-md,12px)] p-[var(--space-3)] text-[length:var(--text-caption1)] text-[var(--system-red)]"
+            style={{ background: "color-mix(in srgb, var(--system-red) 10%, transparent)" }}
+          >
+            {result.message}
           </div>
         )}
       </CardContent>
