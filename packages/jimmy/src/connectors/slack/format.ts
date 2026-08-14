@@ -4,14 +4,88 @@ import { randomUUID } from "node:crypto";
 
 const SLACK_MAX_LENGTH = 3000;
 
+/** A Markdown table separator row — cells of dashes with optional colons/spaces
+ *  (e.g. `|---|:--:|`). Every cell must be dashes-only for it to count. */
+function isTableSeparator(line: string): boolean {
+  const t = line.trim();
+  if (!t.includes("-") || !t.includes("|")) return false;
+  const cells = t.replace(/^\|/, "").replace(/\|$/, "").split("|");
+  return cells.length > 0 && cells.every((c) => /^\s*:?-{1,}:?\s*$/.test(c));
+}
+
+/** Split a `| a | b |` row into trimmed cells, dropping the outer pipes. */
+function splitTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
+
+/** Strip inline markdown from a cell so monospace column widths line up. */
+function plainTableCell(s: string): string {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1");
+}
+
+/** Render a parsed table as an aligned monospace block inside a ``` fence —
+ *  Slack has no table support, but renders fenced code fixed-width so columns
+ *  line up and stay readable. */
+function renderMonospaceTable(header: string[], rows: string[][]): string {
+  const cols = Math.max(header.length, ...rows.map((r) => r.length));
+  const norm = (r: string[]) => Array.from({ length: cols }, (_, i) => plainTableCell(r[i] ?? ""));
+  const h = norm(header);
+  const body = rows.map(norm);
+  const widths = Array.from({ length: cols }, (_, i) =>
+    Math.max(h[i].length, ...body.map((r) => r[i].length), 3),
+  );
+  const pad = (r: string[]) => r.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();
+  const lines = [pad(h), widths.map((w) => "-".repeat(w)).join("  "), ...body.map(pad)];
+  return "```\n" + lines.join("\n") + "\n```";
+}
+
+/** Convert GitHub-flavoured Markdown tables to aligned monospace ``` blocks.
+ *  Runs BEFORE the mrkdwn conversion so the generated code fence is then
+ *  protected from bold/bullet rewriting. Existing code fences are left as-is. */
+function convertMarkdownTables(text: string): string {
+  return text
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, idx) => {
+      if (idx % 2 === 1) return part; // existing fenced code block — untouched
+      const lines = part.split("\n");
+      const out: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const next = lines[i + 1];
+        if (lines[i].includes("|") && next !== undefined && isTableSeparator(next)) {
+          const header = splitTableRow(lines[i]);
+          const rows: string[][] = [];
+          let j = i + 2;
+          while (j < lines.length && lines[j].includes("|") && lines[j].trim() !== "") {
+            rows.push(splitTableRow(lines[j]));
+            j++;
+          }
+          out.push(renderMonospaceTable(header, rows));
+          i = j - 1;
+        } else {
+          out.push(lines[i]);
+        }
+      }
+      return out.join("\n");
+    })
+    .join("");
+}
+
 /**
  * Convert standard markdown to Slack mrkdwn format.
- * Handles headings, bold, strikethrough, links, and bullet lists.
+ * Handles headings, bold, strikethrough, links, bullet lists, and tables
+ * (rendered as aligned monospace, since Slack mrkdwn has no table support).
  * Preserves code blocks and inline code untouched.
  */
 export function markdownToSlackMrkdwn(text: string): string {
+  // Tables first → ``` blocks, which the split below then protects.
+  const withTables = convertMarkdownTables(text);
   // Split text into code and non-code segments to protect code from conversion
-  const segments = text.split(/(```[\s\S]*?```|`[^`]+`)/g);
+  const segments = withTables.split(/(```[\s\S]*?```|`[^`]+`)/g);
 
   return segments
     .map((segment, i) => {

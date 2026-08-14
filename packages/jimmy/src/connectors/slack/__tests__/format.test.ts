@@ -142,3 +142,26 @@ describe("formatResponse", () => {
     expect(result[0].startsWith("*Title*")).toBe(true);
   });
 });
+
+describe("tables", () => {
+  it("renders a markdown table as an aligned monospace code block", () => {
+    const md = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
+    expect(markdownToSlackMrkdwn(md)).toBe("```\nName   Age\n-----  ---\nAlice  30\n```");
+  });
+
+  it("leaves a non-table pipe line untouched", () => {
+    expect(markdownToSlackMrkdwn("a | b")).toBe("a | b");
+  });
+
+  it("does not convert a table inside an existing code fence", () => {
+    const md = "```\n| a | b |\n| --- | --- |\n```";
+    expect(markdownToSlackMrkdwn(md)).toBe(md);
+  });
+
+  it("strips inline markdown in cells and drops raw pipe rows", () => {
+    const out = markdownToSlackMrkdwn("| **A** | B |\n|---|---|\n| 1 | 2 |");
+    expect(out).toContain("```");
+    expect(out).not.toContain("**");
+    expect(out).not.toContain("|---|");
+  });
+});
