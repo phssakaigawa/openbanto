@@ -131,8 +131,15 @@ The engine:
   gateway emits them;
 - keeps a small per-`sessionId` in-memory transcript so a resumed turn replays
   prior context (MVP; lost on restart — `syncResume:false`);
-- **does NOT do tool-calls / MCP yet** — `mcpConfigPath` is ignored (TODO in the
-  source). The goal is a reliable "conversation" engine first.
+- **does tool-calls / MCP** (`feat/openai-mcp-tools`): when `mcpConfigPath` yields
+  MCP servers it connects an MCP client per server (stdio or URL/SSE/HTTP via
+  `@modelcontextprotocol/sdk`), advertises their tools as OpenAI `tools` namespaced
+  `"<server>__<tool>"`, and runs a bounded **non-streaming** tool-call loop
+  (POST → run `tool_calls` via MCP → append `{role:"tool"}` results → repeat, cap
+  8 rounds) until a final answer, which it streams out. With no tools it uses the
+  streaming chat path above. `kill`/`killAll` also close the MCP clients, and the
+  turn always closes them in `finally`. Capabilities are unchanged (transport
+  stays `http`). See `engines/openai.ts` + `mcp/tool-bridge.ts`.
 
 The `/model` picker surfaces each impl engine's `engines.<name>.model`
 (`shared/models.ts` `addImplEngineEntries`), so `/model` can switch to it.

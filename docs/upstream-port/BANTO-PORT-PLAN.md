@@ -164,6 +164,17 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 | WebUI（タブ/フォーム） | `packages/web/src/app/plugins/page.tsx`（`McpSection`/`McpServerForm`/`SecretKvEditor`、MCP タブ）+ `lib/api.ts`（`upsertMcpServer`/`deleteMcpServer`＋`McpServerSummary`/`mcpServers`） | 信頼警告バナー＋**エンジン対応ヒント**（claude 消費・bob 非対応・openai は tool-call 実装後）。secret 欄は password・編集時は空欄プレースホルダで「設定済」表示（prefill しない） |
 | 単体テスト | `gateway/__tests__/plugins-api.test.ts`（`mergeSecretMap` 据置/上書き/削除・`buildMcpBlock` バリデーション＋secret 据置・`summarizeMcpServers` マスク＝serialize に秘匿値が出ないこと） | disk I/O を伴わない純粋関数を検証（`upsertMcpServer` の read/write は薄いラッパ） |
 
+### N. OpenAI 互換エンジンの MCP tool-call ブリッジ（OpenBanto 独自）
+§J の `impl:"openai"` エンジンに **MCP tool-call 対応**を足したもの。これまで `opts.mcpConfigPath` は無視（TODO）だったが、config が MCP サーバを返すとき、各サーバへ **MCP クライアント接続**（stdio＝`StdioClientTransport`／URL＝`type:"sse"` は `SSEClientTransport`・それ以外は `StreamableHTTPClientTransport`、`headers` は `requestInit` 経由）し、全サーバの `listTools()` を **`"<server>__<tool>"` に名前空間化**して OpenAI `tools`(function) へ変換する。以後は **非 stream** の `POST /v1/chat/completions`（`tools`＋`tool_choice:"auto"`）を回し、`tool_calls` を **MCP で実行**→結果を `{role:"tool"}` で積む→次ラウンド、を **最大 8 ラウンド**繰り返す。`tool_calls` の無い回答が最終＝`onStream({type:"text"})` で流して終了。**ツール無し／`mcpConfigPath` 無しは従来どおり stream 平文チャット**（既存挙動不変）。MCP SDK は公式 `@modelcontextprotocol/sdk`（jimmy 依存に追加）。詳細は `docs/design/tools-mcp-wiring.md` / `http-engine-skeleton.md` / `engine-plugins.md`。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| MCP ブリッジ（新規） | `mcp/tool-bridge.ts`（`McpToolBridge`＝connect/listTools 名前空間化/callTool 逆引き/close、SDK deps は注入可能＝`BridgeDeps`） | **★secret 非ログ**：接続失敗は握ってサーバ名のみ warn（env/headers 値を出さない）。SDK は ESM 専用＝`connect()` 内で **動的 import**（deps 注入時は SDK を読み込まない）。tool 名衝突は最初勝ち |
+| tool-call ループ（新規） | `engines/openai.ts` `runToolLoop`（非 stream・8 ラウンド上限）/ `runStreaming`（従来路を関数抽出）/ `readMcpServers`（config 読み・throw しない） | **★従来 stream 路を壊さない**：ツール無し時は `runStreaming` で完全に従来挙動。MCP セットアップ失敗は turn を落とさず平文にフォールバック。ループ上限で暴走防止 |
+| abort / cleanup | `engines/openai.ts` `kill`/`killAll`（AbortController に加え `liveBridges` を close）＋`run` の `finally` で必ず close | **★MCP クライアントのリーク防止**：kill は fire-and-forget close＋map から削除（finally との二重 close を回避）。abort は `interrupted` を維持 |
+| 依存追加 | `packages/jimmy/package.json`（`@modelcontextprotocol/sdk ^1.30.0`）＋`pnpm-lock.yaml` | **コア MIT クリーンは維持**（SDK は MIT）。他パッケージと矛盾しない安定版 |
+| 単体テスト（新規） | `engines/__tests__/openai.mcp.test.ts`（①tools 変換＋名前空間 ②tool_calls→MCP callTool→結果を messages→最終 text ③ツール無し=平文 ④abort で両方 close） | 実 HTTP/実 MCP を叩かずモック：`bridgeDeps` で fake Client 注入・`fetch` は stub。secret 非漏洩も assert |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
@@ -178,6 +189,7 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 6c. **★プラグイン管理UIのセキュリティ gate が生きているか**（`gateway/plugins-api.ts` `requirePluginAdmin`＝`manageUi` flag→group 再チェック→loopback fallback / `validateModuleSpec` の npm・git+https 限定＋shell メタ拒否 / `pnpm add` が **execFile（シェル非経由）** のままか。`gateway/api.ts` `/api/plugins/*` 各ルートが gate を通しているか。`PUT /api/config` `KNOWN_KEYS` に `plugins`/`guardrails` が残っているか）
 6e. **★MCP サーバ登録フォームが生きているか**（`gateway/plugins-api.ts` `summarizeMcpServers` が headers/env 値・URL 内トークンをマスク＝`hasHeaders`/`hasEnv` bool のみ返すか / `buildMcpBlock`+`mergeSecretMap` が編集時 secret 据置（空欄＝維持）か / `upsertMcpServer` が **`pnpm add`/`execFile` を叩かず** config 配線のみか。`gateway/api.ts` の `POST`/`DELETE /api/plugins/mcp` が `requirePluginAdmin` を通し監査に**値を出さない**か。`mcp/resolver.ts` が `enabled:false` を skip したままか。反映は per-turn＝`needsRestart:false`）
 6d. **★汎用 OpenAI 互換エンジンが生きているか**（`engines/registry.ts` の impl 解決＝`resolveEngine(name, block)` 第3経路・`IMPL_PLUGINS.openai`・`engineImplOf` が残っているか。`gateway/server.ts` の engine map 列挙が `impl` を拾うか。`shared/models.ts` `addImplEngineEntries` で /model picker に出るか。`gateway/plugins-api.ts` `upsertOpenAiEngine` が **pnpm add を叩かず** apiKey を据置更新・非漏洩のままか。`openai.ts` が abort→`interrupted`・apiKey 非ログか）
+6f. **★OpenAI 互換エンジンの MCP tool-call が生きているか**（`engines/openai.ts` が `mcpConfigPath` から `mcp/tool-bridge.ts` `McpToolBridge` 経由でツールを取得し、`"<server>__<tool>"` 名前空間で OpenAI `tools` 化・非 stream tool-call ループ（8 ラウンド上限）を回すか。ツール無し／config 無しは `runStreaming` で従来平文挙動のままか。`kill`/`killAll`/`finally` が MCP クライアントを close しリークしないか。stdio と URL(SSE/HTTP) 両 transport を扱い接続失敗を握って skip・**env/headers 値を非ログ**か。`@modelcontextprotocol/sdk` が jimmy 依存に残り、`tsc --noEmit` 0 エラーか）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）
 
