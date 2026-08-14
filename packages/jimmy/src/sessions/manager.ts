@@ -461,7 +461,12 @@ export class SessionManager {
       });
 
       const engineConfig = resolveEngineConfig(this.config, session.engine);
-      if (session.engine === "claude") {
+      // MCP tools are consumed by claude (native `--mcp-config`) AND by the
+      // OpenAI-compatible engine (via its MCP tool-call bridge). Resolve + write
+      // the per-turn MCP config for EVERY engine; engines that don't read the
+      // path (bob/codex/gemini) simply ignore it. (Previously gated to
+      // `engine === "claude"`, which starved the AiDEA/openai engine of tools.)
+      {
         const mcpConfig = resolveMcpServers(this.config.mcp, employee, {
           connector: connector.name,
           channel: target.channel,
