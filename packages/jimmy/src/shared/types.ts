@@ -333,6 +333,15 @@ export interface McpGlobalConfig {
   gateway?: {
     enabled: boolean;
   };
+  /**
+   * Built-in scoped knowledge server: read/write/list files under
+   * `~/.openbanto/knowledge/`. Enabled by default (omit or `enabled: true`);
+   * set `enabled: false` to opt out. This is how the OpenAI (AiDEA) engine —
+   * which has no native filesystem access — records per-user knowledge.
+   */
+  knowledge?: {
+    enabled: boolean;
+  };
   /** Custom MCP servers defined by the user */
   custom?: Record<string, (McpServerStdioConfig | McpServerUrlConfig) & { enabled?: boolean }>;
 }

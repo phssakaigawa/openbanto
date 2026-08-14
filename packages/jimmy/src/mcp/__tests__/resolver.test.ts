@@ -24,4 +24,30 @@ describe("resolveMcpServers", () => {
       JINN_CURRENT_THREAD: "1700000000.000100",
     });
   });
+
+  it("includes the built-in knowledge server by default", () => {
+    const config = {
+      browser: { enabled: false },
+      fetch: { enabled: false },
+      search: { enabled: false },
+    } satisfies JinnConfig["mcp"];
+
+    const resolved = resolveMcpServers(config, undefined);
+    const knowledge = resolved.mcpServers.knowledge as McpServerStdioConfig;
+    expect(knowledge).toBeDefined();
+    expect(knowledge.command).toBe("node");
+    expect(knowledge.args?.[0]).toMatch(/knowledge-server\.js$/);
+  });
+
+  it("omits the knowledge server when explicitly disabled", () => {
+    const config = {
+      knowledge: { enabled: false },
+      browser: { enabled: false },
+      fetch: { enabled: false },
+      search: { enabled: false },
+    } satisfies JinnConfig["mcp"];
+
+    const resolved = resolveMcpServers(config, undefined);
+    expect(resolved.mcpServers.knowledge).toBeUndefined();
+  });
 });

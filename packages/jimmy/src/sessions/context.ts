@@ -27,6 +27,39 @@ import { resolveEngineConfig } from "../engines/registry.js";
 
 const DEFAULT_MAX_CONTEXT_CHARS = 100_000;
 
+// ── Per-user knowledge scoping ────────────────────────────────
+const KNOWLEDGE_DIR = path.join(JINN_HOME, "knowledge");
+const KNOWLEDGE_SHARED_DIR = path.join(KNOWLEDGE_DIR, "shared");
+const KNOWLEDGE_USERS_DIR = path.join(KNOWLEDGE_DIR, "users");
+
+/** Speaker fields consumed by the knowledge/evolution builders. */
+export interface SpeakerScope {
+  speakerSlackId?: string;
+  speakerName?: string;
+  speakerIsOperator?: boolean;
+}
+
+/**
+ * Derive a filesystem-safe key that identifies the speaker for per-user
+ * knowledge scoping. Prefers the connector-native ID (Slack U12345…) which is
+ * stable and unique; falls back to a normalized display name. Everything
+ * outside `[a-z0-9_-]` is dropped; an empty result becomes "unknown" so we
+ * never build a path from an empty segment.
+ */
+export function userKey(scope: SpeakerScope | undefined): string {
+  const raw = scope?.speakerSlackId?.trim() || scope?.speakerName?.trim() || "";
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "unknown";
+}
+
+/** Absolute path to a per-user knowledge file (profile.md / preferences.md). */
+function userKnowledgePath(key: string, file: string): string {
+  return path.join(KNOWLEDGE_USERS_DIR, key, file);
+}
+
 // ── Tier enum for progressive trimming ────────────────────────
 const enum Tier {
   ESSENTIAL = 0,
@@ -105,6 +138,14 @@ export function buildContext(opts: {
     opts.config?.portal?.operatorAliases,
   );
 
+  // Speaker scope for per-user knowledge (profile/preferences are keyed by
+  // this — first-contact ご記帳 fires per speaker, not once globally).
+  const speakerScope: SpeakerScope = {
+    speakerSlackId: opts.speakerSlackId,
+    speakerName: opts.speakerName,
+    speakerIsOperator,
+  };
+
   // ── ESSENTIAL: Identity ─────────────────────────────────────
   if (opts.employee) {
     sections.push({
@@ -133,8 +174,8 @@ export function buildContext(opts: {
     sections.push({
       tier: Tier.STANDARD,
       marker: "## Self-evolution",
-      content: buildEvolutionContext(portalName, opts.config),
-      summary: `## Self-evolution\nUpdate knowledge files in \`~/.openbanto/knowledge/\` when you learn new info about the user or their projects.`,
+      content: buildEvolutionContext(portalName, opts.config, speakerScope),
+      summary: `## Self-evolution\nUpdate this speaker's knowledge files under \`~/.openbanto/knowledge/users/${userKey(speakerScope)}/\` when you learn new info about them or their projects.`,
     });
   }
 
@@ -211,7 +252,7 @@ export function buildContext(opts: {
   }
 
   // ── OPTIONAL: Knowledge / docs (filenames only, never inlined)
-  const knowledgeCtx = buildKnowledgeContext();
+  const knowledgeCtx = buildKnowledgeContext(speakerScope);
   if (knowledgeCtx) {
     sections.push({
       tier: Tier.OPTIONAL,
@@ -623,51 +664,57 @@ function buildCronContext(): string | null {
 /**
  * Knowledge context: lists filenames and sizes only — never inlines content.
  * The AI reads files on demand. This saves ~200K+ chars compared to full inlining.
+ *
+ * Per-user scoped: the speaker sees THEIR own `knowledge/users/<userKey>/`
+ * files plus organization-wide `knowledge/shared/` and any legacy top-level
+ * `knowledge/*.md` (back-compat with the old single-user layout), and `docs/`.
+ * Another speaker's `users/<other>/` files are never listed here.
  */
-function buildKnowledgeContext(): string | null {
-  const dirs = [
-    { dir: DOCS_DIR, label: "docs" },
-    { dir: path.join(JINN_HOME, "knowledge"), label: "knowledge" },
+function buildKnowledgeContext(scope?: SpeakerScope): string | null {
+  const key = userKey(scope);
+  const groups: { label: string; dir: string; hint: string }[] = [
+    { label: "docs", dir: DOCS_DIR, hint: "`~/.openbanto/docs/`" },
+    { label: `your knowledge (users/${key})`, dir: userKnowledgePath(key, "."), hint: `\`~/.openbanto/knowledge/users/${key}/\`` },
+    { label: "shared", dir: KNOWLEDGE_SHARED_DIR, hint: "`~/.openbanto/knowledge/shared/`" },
+    // Legacy single-user layout: top-level knowledge/*.md files kept readable.
+    { label: "knowledge (legacy shared)", dir: KNOWLEDGE_DIR, hint: "`~/.openbanto/knowledge/`" },
   ];
-  const entries: { name: string; dir: string; sizeKb: string }[] = [];
 
-  for (const { dir, label } of dirs) {
+  const out: { label: string; hint: string; files: { name: string; sizeKb: string }[] }[] = [];
+
+  for (const { label, dir, hint } of groups) {
+    let files: string[];
     try {
-      const files = fs.readdirSync(dir).filter(f =>
-        f.endsWith(".md") || f.endsWith(".txt") || f.endsWith(".yaml"),
-      );
-      for (const f of files) {
-        try {
-          const stat = fs.statSync(path.join(dir, f));
-          entries.push({
-            name: f,
-            dir: label,
-            sizeKb: (stat.size / 1024).toFixed(1),
-          });
-        } catch {
-          entries.push({ name: f, dir: label, sizeKb: "?" });
-        }
-      }
+      files = fs.readdirSync(dir, { withFileTypes: true })
+        .filter(d => d.isFile() && (d.name.endsWith(".md") || d.name.endsWith(".txt") || d.name.endsWith(".yaml")))
+        .map(d => d.name);
     } catch {
-      // dir doesn't exist
+      continue; // dir doesn't exist
     }
+    if (files.length === 0) continue;
+    const listed = files.map(f => {
+      try {
+        const stat = fs.statSync(path.join(dir, f));
+        return { name: f, sizeKb: (stat.size / 1024).toFixed(1) };
+      } catch {
+        return { name: f, sizeKb: "?" };
+      }
+    });
+    out.push({ label, hint, files: listed });
   }
 
-  if (entries.length === 0) return null;
+  if (out.length === 0) return null;
 
   const lines: string[] = [
     `## Knowledge base`,
-    `Knowledge files are in \`~/.openbanto/knowledge/\` and \`~/.openbanto/docs/\`. Read them directly when needed.`,
+    `Your personal knowledge is under \`~/.openbanto/knowledge/users/${key}/\`; organization-wide notes are in \`~/.openbanto/knowledge/shared/\`; docs are in \`~/.openbanto/docs/\`. Read files directly (or via the knowledge MCP tools) when needed.`,
     ``,
   ];
 
-  // Group by directory
-  for (const label of ["docs", "knowledge"]) {
-    const group = entries.filter(e => e.dir === label);
-    if (group.length === 0) continue;
-    lines.push(`**${label}/** (${group.length} files):`);
-    for (const e of group) {
-      lines.push(`- \`${e.name}\` (${e.sizeKb} KB)`);
+  for (const g of out) {
+    lines.push(`**${g.label}** (${g.files.length} file${g.files.length === 1 ? "" : "s"}, ${g.hint}):`);
+    for (const f of g.files) {
+      lines.push(`- \`${f.name}\` (${f.sizeKb} KB)`);
     }
     lines.push("");
   }
@@ -820,10 +867,30 @@ function buildEnvironmentContext(): string | null {
   return lines.join("\n");
 }
 
-function buildEvolutionContext(portalName: string, config?: JinnConfig): string {
-  const profilePath = path.join(JINN_HOME, "knowledge", "user-profile.md");
+function buildEvolutionContext(portalName: string, config?: JinnConfig, scope?: SpeakerScope): string {
+  const key = userKey(scope);
+  const profilePath = userKnowledgePath(key, "profile.md");
+  const prefsPath = userKnowledgePath(key, "preferences.md");
+  // Relative-to-knowledge-root paths for the engine-agnostic knowledge MCP tools.
+  const profileRel = `users/${key}/profile.md`;
+  const prefsRel = `users/${key}/preferences.md`;
+
+  // isNew is decided PER SPEAKER: onboarding (ご記帳) fires only for a speaker
+  // we haven't registered yet. A known speaker's profile.md carries them past
+  // the greeting even on their first message of a new session.
   let profileContent = "";
   try { profileContent = fs.readFileSync(profilePath, "utf-8").trim(); } catch {}
+  // Back-compat: if this speaker is the operator (or no scoped profile exists
+  // yet) but a legacy single-user profile is populated, treat them as known so
+  // we don't re-onboard the existing operator after the layout change.
+  if (profileContent.length < 50) {
+    try {
+      const legacy = fs.readFileSync(path.join(KNOWLEDGE_DIR, "user-profile.md"), "utf-8").trim();
+      if (legacy.length >= 50 && (scope?.speakerIsOperator || !scope?.speakerName)) {
+        profileContent = legacy;
+      }
+    } catch { /* no legacy profile */ }
+  }
 
   const isNew = profileContent.length < 50;
 
@@ -848,19 +915,19 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig): string 
     lines.push(`- ${portalName} に任せたいこと（コードレビュー、デプロイ、監視、情報収集 など）`);
     lines.push(`- やり取りの好み（絵文字の量、簡潔 / 詳細、言語）`);
     lines.push(`- 進行中のプロジェクトや知っておくべき文脈`);
-    lines.push(`\nAs you learn each item, quietly record it to \`~/.openbanto/knowledge/user-profile.md\` and \`~/.openbanto/knowledge/preferences.md\`. Once you have the basics, say a brief 「ご記帳ありがとうございます」 and proceed to help with whatever they need.`);
+    lines.push(`\nAs you learn each item, quietly record it for THIS speaker to \`${profilePath}\` and \`${prefsPath}\`. Use whatever file access you have: the \`write_knowledge\` knowledge tool with path \`${profileRel}\` / \`${prefsRel}\` (relative to the knowledge root), or a direct file write if your engine has native filesystem access. Once you have the basics, say a brief 「ご記帳ありがとうございます」 and proceed to help with whatever they need.`);
     if (canvasHintApplies) {
       lines.push(
         `\nIf the conversation goes well and Slack is set up, you may also mention that you can mirror all your running sessions to a Slack canvas (the "Agents View Canvas") — but only once, briefly, and only if it feels natural.`,
       );
     }
   } else {
-    lines.push(`You learn and evolve over time. When you discover new information about the user, their projects, or their preferences:`);
-    lines.push(`- Update \`~/.openbanto/knowledge/user-profile.md\` with business/identity info`);
-    lines.push(`- Update \`~/.openbanto/knowledge/preferences.md\` with style/communication preferences`);
-    lines.push(`- Update \`~/.openbanto/knowledge/projects.md\` with project details`);
+    lines.push(`You learn and evolve over time. Record what you learn for THIS speaker (keyed as \`${key}\`). Use the \`write_knowledge\` knowledge tool (paths relative to the knowledge root) OR a direct file write if your engine has native filesystem access — both reach the same files:`);
+    lines.push(`- \`${profileRel}\` (\`${profilePath}\`) — this person's business/identity info`);
+    lines.push(`- \`${prefsRel}\` (\`${prefsPath}\`) — their style/communication preferences`);
+    lines.push(`- \`shared/projects.md\` — project details relevant to the whole team`);
     lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), update \`~/.openbanto/CLAUDE.md\``);
-    lines.push(`\nDo this silently — don't announce every file update. Just evolve.`);
+    lines.push(`\nRead the same paths with \`read_knowledge\` (or a native read) to recall what you already know about this speaker. Do this silently — don't announce every file update. Just evolve.`);
     if (canvasHintApplies) {
       lines.push(
         `\n### Available feature the user hasn't enabled: Agents View Canvas`,
