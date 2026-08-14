@@ -26,6 +26,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@slack/bolt": "^4.3.0",
     "better-sqlite3": "^11.8.0",
     "busboy": "^1.6.0",

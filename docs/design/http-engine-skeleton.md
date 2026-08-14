@@ -9,6 +9,15 @@
 > `engine-plugins.md` → "Built-in `impl:"openai"` engine". This document remains
 > the reference for building an HTTP engine as an **external SDK package** when you
 > want it out-of-tree; the in-tree engine was written directly from this skeleton.
+>
+> **UPDATE (`feat/openai-mcp-tools`):** the in-tree OpenAI engine now implements
+> the tool-call / MCP path below. When `opts.mcpConfigPath` yields MCP servers it
+> connects an MCP client per server (stdio or URL/SSE/HTTP via
+> `@modelcontextprotocol/sdk`), advertises their tools as OpenAI `tools`
+> namespaced `"<server>__<tool>"`, and runs a bounded **non-streaming** tool-call
+> loop (feed `tool_calls` results back until final). Without tools it keeps the
+> streaming chat path shown here. See `engines/openai.ts` + `mcp/tool-bridge.ts`
+> and `tools-mcp-wiring.md`.
 
 Status: **handoff reference** for an engine-plugin developer building an HTTP
 engine (an OpenAI-compatible model gateway). The engine is an **external
@@ -69,6 +78,7 @@ class MyLlmEngine implements InterruptibleEngine {
       // - tool-call: advertise the tools from opts.mcpConfigPath (see
       //   tools-mcp-wiring.md) as OpenAI "tools", loop on tool_calls, and run
       //   the tool via your MCP client, feeding results back until final.
+      //   (Implemented in-tree: see engines/openai.ts runToolLoop + mcp/tool-bridge.ts.)
       const res = await fetch(`${this.cfg.baseUrl}/v1/chat/completions`, {
         method: "POST",
         signal: ac.signal,

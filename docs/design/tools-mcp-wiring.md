@@ -20,8 +20,8 @@ resolveMcpServers(this.config.mcp, employee, {...})   // manager.ts:441
 - `employee.mcp` (`Employee.mcp?: boolean | string[]`, `types.ts:234`) selects
   **which** servers that employee (assistant persona) may use — `true` = all, or an
   allow-list of server names.
-- The engine (bob today, an HTTP engine next) receives `mcpConfigPath` and calls
-  the tools.
+- The engine receives `mcpConfigPath` and calls the tools. The `claude` engine
+  and the built-in `impl:"openai"` HTTP engines both do this today (bob does not).
 
 So a skill = **one MCP server** registered in `config.mcp`, enabled on the
 assistant employee via `employee.mcp`.
@@ -130,7 +130,13 @@ to add, edit, toggle, or remove an MCP server.
 ### Which engine consumes MCP tools
 
 MCP tools are invoked by the **engine**, not the connector. Today the `claude`
-engine consumes stdio/HTTP(SSE) MCP servers. `bob` does not support MCP; the
-OpenAI-compatible engines (`AiDEA` / `Kannon`) will consume MCP once their
-tool-call path is implemented. The UI surfaces this as a hint so operators do not
-expect a registered server to take effect under an engine that cannot call it.
+engine **and the built-in OpenAI-compatible `impl:"openai"` engines**
+(`AiDEA` / `Kannon`) consume MCP servers — both stdio and URL (SSE / streamable
+HTTP) transports. The OpenAI engine reads `opts.mcpConfigPath`, connects an MCP
+client per server via `@modelcontextprotocol/sdk`, advertises each server's tools
+to the model as OpenAI `tools` namespaced `"<server>__<tool>"`, and runs a bounded
+non-streaming tool-call loop (POST → run `tool_calls` via MCP → feed results back
+as `{role:"tool"}` messages) until the model returns a final answer. See
+`engines/openai.ts` + `mcp/tool-bridge.ts`. `bob` does not support MCP. The UI
+surfaces this as a hint so operators do not expect a registered server to take
+effect under an engine that cannot call it.

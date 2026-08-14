@@ -6,8 +6,14 @@
 // named instances: `engines.aidea` and `engines.kannon` both resolve here and
 // each get their own OpenAiEngine built from their own baseUrl/apiKey/model.
 //
-// See openai.ts, registry.ts (resolveEngine / IMPL_PLUGINS) and
-// docs/design/http-engine-skeleton.md.
+// MCP tool-calls: the underlying OpenAiEngine now honours opts.mcpConfigPath —
+// it connects to the resolved MCP servers (stdio or URL/SSE/HTTP), advertises
+// their tools to the model, and runs a tool-call loop. No capability flag
+// changes are needed (transport stays "http", each turn is still one logical
+// request from the gateway's point of view).
+//
+// See openai.ts, mcp/tool-bridge.ts, registry.ts (resolveEngine / IMPL_PLUGINS)
+// and docs/design/http-engine-skeleton.md / tools-mcp-wiring.md.
 import type { EngineContext } from "./registry.js";
 import { defineEnginePlugin } from "./registry.js";
 
