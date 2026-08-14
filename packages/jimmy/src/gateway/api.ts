@@ -66,12 +66,15 @@ import {
   updatePluginConfig,
   upsertOpenAiEngine,
   setGuardrail,
+  upsertMcpServer,
+  deleteMcpServer,
   auditPluginAction,
   type InstallRequest,
   type ToggleRequest,
   type ConfigUpdateRequest,
   type OpenAiEngineRequest,
   type SetGuardrailRequest,
+  type McpUpsertRequest,
 } from "./plugins-api.js";
 import { armSelfRestart, isRestarting } from "./self-restart.js";
 
@@ -1566,6 +1569,46 @@ Handle this as a priority request from a colleague.`;
           context.auditSink,
         );
         if (result.patched) invalidateModelRegistry();
+        return json(res, result.body, result.http);
+      }
+
+      // POST /api/plugins/mcp — create/update (or delete via action:"delete") a
+      // custom MCP server (config.mcp.custom.<name>). MCP config is resolved
+      // per-turn by the resolver, so this needs NO restart — the config watcher
+      // refreshes SessionManager and the next turn picks it up. Header/env
+      // secrets are write-only (blank on edit keeps the stored value) and are
+      // NEVER echoed back or written to the audit record (only name/transport).
+      if (method === "POST" && pathname === "/api/plugins/mcp") {
+        const _parsed = await readJsonBody(req, res);
+        if (!_parsed.ok) return;
+        const body = _parsed.body as McpUpsertRequest;
+        const result = upsertMcpServer(body);
+        await auditPluginAction(
+          {
+            who,
+            action: body?.action === "delete" ? "mcp.delete" : "mcp.upsert",
+            name: body?.name,
+            transport: body?.transport,
+            result: result.body.status,
+          },
+          context.auditSink,
+        );
+        // Nudge the in-memory config so GET /api/plugins reflects the write
+        // immediately (the chokidar watcher also refreshes ~500ms later and is
+        // what re-arms SessionManager for the next turn's MCP resolution).
+        if (result.patched) context.config = context.getConfig();
+        return json(res, result.body, result.http);
+      }
+
+      // DELETE /api/plugins/mcp?name=… — remove a custom MCP server.
+      if (method === "DELETE" && pathname === "/api/plugins/mcp") {
+        const name = url.searchParams.get("name") || "";
+        const result = deleteMcpServer(name);
+        await auditPluginAction(
+          { who, action: "mcp.delete", name, result: result.body.status },
+          context.auditSink,
+        );
+        if (result.patched) context.config = context.getConfig();
         return json(res, result.body, result.http);
       }
 

@@ -4,6 +4,9 @@ import {
   validateModuleSpec,
   requirePluginAdmin,
   summarizePlugins,
+  summarizeMcpServers,
+  buildMcpBlock,
+  mergeSecretMap,
 } from "../plugins-api.js";
 import type { JinnConfig } from "../../shared/types.js";
 
@@ -165,5 +168,119 @@ describe("summarizePlugins", () => {
     const s = summarizePlugins(cfg);
     expect(s.guardrails[0].name).toBe("noop");
     expect(s.guardrails[0].kind).toBe("builtin");
+  });
+});
+
+describe("mergeSecretMap (secret preserve-on-blank)", () => {
+  it("keeps stored value when incoming value is blank", () => {
+    const out = mergeSecretMap({ Authorization: "" }, { Authorization: "Bearer stored" });
+    expect(out).toEqual({ Authorization: "Bearer stored" });
+  });
+
+  it("overwrites stored value when incoming value is non-empty", () => {
+    const out = mergeSecretMap({ Authorization: "Bearer new" }, { Authorization: "Bearer old" });
+    expect(out).toEqual({ Authorization: "Bearer new" });
+  });
+
+  it("drops a blank key with no stored value", () => {
+    const out = mergeSecretMap({ X: "" }, undefined);
+    expect(out).toBeUndefined();
+  });
+
+  it("preserves the whole stored map when no incoming map is supplied", () => {
+    const out = mergeSecretMap(undefined, { A: "1", B: "2" });
+    expect(out).toEqual({ A: "1", B: "2" });
+  });
+
+  it("returns undefined for empty inputs", () => {
+    expect(mergeSecretMap({}, undefined)).toBeUndefined();
+    expect(mergeSecretMap(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("buildMcpBlock (validation + secret preserve)", () => {
+  it("rejects a bad name", () => {
+    const r = buildMcpBlock({ name: "Bad Name", transport: "url", url: "https://x" }, undefined);
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects an unknown transport", () => {
+    const r = buildMcpBlock({ name: "x", transport: "grpc" as never }, undefined);
+    expect(r.ok).toBe(false);
+  });
+
+  it("URL: requires an http(s) url and sets type:sse", () => {
+    expect(buildMcpBlock({ name: "x", transport: "url", url: "ftp://nope" }, undefined).ok).toBe(false);
+    const r = buildMcpBlock({ name: "x", transport: "url", url: "https://mcp.example.com/sse" }, undefined);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.block.type).toBe("sse");
+      expect(r.block.url).toBe("https://mcp.example.com/sse");
+      expect(r.created).toBe(true);
+    }
+  });
+
+  it("stdio: requires a command; args cleaned", () => {
+    expect(buildMcpBlock({ name: "x", transport: "stdio", command: "" }, undefined).ok).toBe(false);
+    const r = buildMcpBlock(
+      { name: "x", transport: "stdio", command: "npx", args: [" -y ", "", "@a/b"] as string[] },
+      undefined,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.block.command).toBe("npx");
+      expect(r.block.args).toEqual(["-y", "@a/b"]);
+    }
+  });
+
+  it("edit preserves stored header secret when value left blank", () => {
+    const existing = { type: "sse", url: "https://old", headers: { Authorization: "Bearer stored" } };
+    const r = buildMcpBlock(
+      { name: "x", transport: "url", url: "https://new", headers: { Authorization: "" } },
+      existing,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.block.headers).toEqual({ Authorization: "Bearer stored" });
+      expect(r.block.url).toBe("https://new");
+      expect(r.created).toBe(false);
+    }
+  });
+
+  it("only writes enabled:false (omits when enabled)", () => {
+    const on = buildMcpBlock({ name: "x", transport: "stdio", command: "c", enabled: true }, undefined);
+    const off = buildMcpBlock({ name: "x", transport: "stdio", command: "c", enabled: false }, undefined);
+    if (on.ok) expect("enabled" in on.block).toBe(false);
+    if (off.ok) expect(off.block.enabled).toBe(false);
+  });
+});
+
+describe("summarizeMcpServers (masking)", () => {
+  it("masks header/env values to booleans and surfaces url/command", () => {
+    const cfg = {
+      mcp: {
+        custom: {
+          remote: { type: "sse", url: "https://mcp.example.com/sse", headers: { Authorization: "Bearer SECRET" } },
+          local: { command: "npx", args: ["-y", "@a/b"], env: { TOKEN: "SECRET" }, enabled: false },
+        },
+      },
+    } as unknown as JinnConfig;
+    const list = summarizeMcpServers(cfg);
+    const remote = list.find((s) => s.name === "remote")!;
+    const local = list.find((s) => s.name === "local")!;
+    expect(remote.transport).toBe("url");
+    expect(remote.url).toBe("https://mcp.example.com/sse");
+    expect(remote.hasHeaders).toBe(true);
+    expect(remote.enabled).toBe(true);
+    expect(local.transport).toBe("stdio");
+    expect(local.command).toBe("npx");
+    expect(local.hasEnv).toBe(true);
+    expect(local.enabled).toBe(false);
+    // No secret value must appear anywhere in the serialized summary.
+    expect(JSON.stringify(list)).not.toContain("SECRET");
+  });
+
+  it("returns [] when no custom servers", () => {
+    expect(summarizeMcpServers({} as unknown as JinnConfig)).toEqual([]);
   });
 });

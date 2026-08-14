@@ -220,12 +220,31 @@ export interface PluginEntry {
   };
 }
 
+/** Non-secret view of one `mcp.custom.<name>` entry for the Web list. Secret
+ *  material (header values, env values, tokens embedded in the URL) is NEVER
+ *  returned — only booleans (hasHeaders / hasEnv). The URL itself is shown so
+ *  the operator can identify the server; it should not carry a secret in the
+ *  path/query (auth belongs in headers). */
+export interface McpServerSummary {
+  name: string;
+  transport: "stdio" | "url";
+  enabled: boolean;
+  /** URL-transport only — the endpoint (no secrets; auth is in headers). */
+  url?: string;
+  /** stdio-transport only — the command (args are not surfaced here). */
+  command?: string;
+  hasHeaders: boolean;
+  hasEnv: boolean;
+}
+
 export interface PluginsSummary {
   manageUi: boolean;
   adminGroup: string;
   engines: PluginEntry[];
   connectors: PluginEntry[];
   guardrails: PluginEntry[];
+  /** Custom MCP servers (config.mcp.custom) — masked (no secret values). */
+  mcpServers: McpServerSummary[];
 }
 
 /** Reserved keys inside an engine block that are not "config" for hasConfig. */
@@ -271,6 +290,30 @@ function summarizeSampleConfig(cfg: unknown): PluginEntry["sample"] {
     auditSink,
     hasAuditEndpoint: typeof audit.endpoint === "string" && audit.endpoint.length > 0,
   };
+}
+
+/** Reduce `config.mcp.custom` to the masked, non-secret list the Web UI shows.
+ *  Header/env values and any URL-embedded token are NEVER echoed — only the
+ *  boolean presence (hasHeaders / hasEnv) and the (non-secret) url/command. */
+export function summarizeMcpServers(config: JinnConfig): McpServerSummary[] {
+  const out: McpServerSummary[] = [];
+  const custom = config.mcp?.custom;
+  if (!custom || typeof custom !== "object") return out;
+  for (const [name, raw] of Object.entries(custom)) {
+    if (!raw || typeof raw !== "object") continue;
+    const block = raw as Record<string, any>;
+    const isUrl = typeof block.url === "string" && block.url.length > 0;
+    out.push({
+      name,
+      transport: isUrl ? "url" : "stdio",
+      enabled: block.enabled !== false, // default on unless explicitly disabled
+      ...(isUrl ? { url: block.url } : {}),
+      ...(!isUrl && typeof block.command === "string" ? { command: block.command } : {}),
+      hasHeaders: !!block.headers && typeof block.headers === "object" && Object.keys(block.headers).length > 0,
+      hasEnv: !!block.env && typeof block.env === "object" && Object.keys(block.env).length > 0,
+    });
+  }
+  return out;
 }
 
 /** Build the plugin summary from the live config. */
@@ -360,6 +403,7 @@ export function summarizePlugins(config: JinnConfig): PluginsSummary {
     engines,
     connectors,
     guardrails,
+    mcpServers: summarizeMcpServers(config),
   };
 }
 
@@ -664,6 +708,177 @@ export function setGuardrail(
   return { http: 200, body: { status: "ok", needsRestart: true, policy: "module" }, patched: true };
 }
 
+// ---- Custom MCP servers (config.mcp.custom) --------------------------------
+//
+// MCP servers give the engine external TOOLS. A stdio server spawns a local
+// child process (command/args/env); a URL server is a remote HTTP/SSE endpoint
+// whose auth lives in `headers`. Both are consumed per-turn by the resolver
+// (mcp/resolver.ts), so a config write reflects on the NEXT turn — no restart.
+//
+// Secrets (header values, env values, tokens) are write-only: on an EDIT an
+// empty value keeps the stored one; values are NEVER echoed back or audited.
+
+export interface McpUpsertRequest {
+  /** config key under mcp.custom — [a-z0-9-]+ */
+  name: string;
+  transport: "stdio" | "url";
+  enabled?: boolean;
+  action?: "delete";
+  // URL transport
+  url?: string;
+  headers?: Record<string, string>;
+  type?: "sse";
+  // stdio transport
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+/** MCP server name: lowercase, digits, hyphen — used as a YAML key and as the
+ *  server id Claude Code namespaces its tools under. */
+const MCP_NAME_RE = /^[a-z0-9-]+$/;
+
+/** Coerce an unknown to a clean string[] (trim entries, drop non-strings). */
+function cleanStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * Merge a caller-supplied key→value secret map (headers/env) into the existing
+ * stored map, treating an EMPTY value as "keep the stored value for this key".
+ * A key present with a non-empty value is set/overwritten; a key not mentioned
+ * by the caller is dropped (so the operator can remove a header by omitting it,
+ * while blank-but-present preserves the secret). Returns undefined if empty.
+ */
+export function mergeSecretMap(
+  incoming: Record<string, string> | undefined,
+  existing: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!incoming || typeof incoming !== "object") {
+    // No map supplied at all → keep whatever was stored.
+    return existing && Object.keys(existing).length > 0 ? { ...existing } : undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(incoming)) {
+    const key = String(k).trim();
+    if (!key) continue;
+    const val = typeof v === "string" ? v : "";
+    if (val.length > 0) {
+      out[key] = val; // new/overwritten secret
+    } else if (existing && typeof existing[key] === "string") {
+      out[key] = existing[key]; // blank → preserve stored secret
+    }
+    // blank + no stored value → drop (nothing to keep)
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export interface McpUpsertResult {
+  http: number;
+  body: { status: string; message?: string; needsRestart?: boolean; created?: boolean; deleted?: boolean };
+  patched: boolean;
+}
+
+/**
+ * Build the `mcp.custom.<name>` block from the request, merging secrets from the
+ * existing block so a blank secret on EDIT preserves the stored value. Pure —
+ * no disk I/O — so it is unit-tested directly. Returns either a validation error
+ * ({ ok:false, message }) or the block to write ({ ok:true, block, created }).
+ */
+export function buildMcpBlock(
+  reqBody: McpUpsertRequest,
+  existing: Record<string, any> | undefined,
+): { ok: true; block: Record<string, any>; created: boolean } | { ok: false; message: string } {
+  const name = typeof reqBody?.name === "string" ? reqBody.name.trim() : "";
+  if (!MCP_NAME_RE.test(name)) {
+    return { ok: false, message: "name must match [a-z0-9-]+" };
+  }
+  const transport = reqBody?.transport;
+  if (transport !== "stdio" && transport !== "url") {
+    return { ok: false, message: "transport must be stdio|url" };
+  }
+  const created = !existing;
+  const block: Record<string, any> = {};
+  // enabled: default true; only write `enabled:false` (omit when true to keep
+  // YAML tidy — the resolver treats absent as enabled).
+  const enabled = reqBody.enabled !== false;
+  if (!enabled) block.enabled = false;
+
+  if (transport === "url") {
+    const url = typeof reqBody.url === "string" ? reqBody.url.trim() : "";
+    if (!isHttpUrl(url)) {
+      return { ok: false, message: "url must be an http(s) URL" };
+    }
+    block.type = "sse"; // URL transport is always sse for Claude Code
+    block.url = url;
+    const headers = mergeSecretMap(reqBody.headers, existing?.headers);
+    if (headers) block.headers = headers;
+    return { ok: true, block, created };
+  }
+
+  // stdio
+  const command = typeof reqBody.command === "string" ? reqBody.command.trim() : "";
+  if (!command) {
+    return { ok: false, message: "command is required for stdio transport" };
+  }
+  block.command = command;
+  const args = cleanStringArray(reqBody.args);
+  if (args.length) block.args = args;
+  const env = mergeSecretMap(reqBody.env, existing?.env);
+  if (env) block.env = env;
+  return { ok: true, block, created };
+}
+
+/**
+ * Create or update a custom MCP server. Writes `mcp.custom.<name>` using the
+ * same merge-from-disk config writer as the other plugin endpoints, so an EDIT
+ * preserves stored header/env secrets when the caller leaves them blank. MCP
+ * config is resolved per-turn by the resolver, so this needs NO restart — the
+ * config watcher refreshes SessionManager and the next turn picks it up. Secrets
+ * are never echoed back.
+ */
+export function upsertMcpServer(reqBody: McpUpsertRequest): McpUpsertResult {
+  const name = typeof reqBody?.name === "string" ? reqBody.name.trim() : "";
+  if (!MCP_NAME_RE.test(name)) {
+    return { http: 400, body: { status: "error", message: "name must match [a-z0-9-]+" }, patched: false };
+  }
+
+  const cfg = readConfigFromDisk();
+  cfg.mcp = cfg.mcp && typeof cfg.mcp === "object" ? cfg.mcp : {};
+  cfg.mcp.custom = cfg.mcp.custom && typeof cfg.mcp.custom === "object" ? cfg.mcp.custom : {};
+
+  // Delete path (action:"delete").
+  if (reqBody.action === "delete") {
+    if (!cfg.mcp.custom[name]) {
+      return { http: 404, body: { status: "error", message: "mcp server not found" }, patched: false };
+    }
+    delete cfg.mcp.custom[name];
+    writeConfigToDisk(cfg);
+    return { http: 200, body: { status: "ok", needsRestart: false, deleted: true }, patched: true };
+  }
+
+  const existing =
+    cfg.mcp.custom[name] && typeof cfg.mcp.custom[name] === "object"
+      ? (cfg.mcp.custom[name] as Record<string, any>)
+      : undefined;
+
+  const built = buildMcpBlock(reqBody, existing);
+  if (!built.ok) {
+    return { http: 400, body: { status: "error", message: built.message }, patched: false };
+  }
+
+  cfg.mcp.custom[name] = built.block;
+  writeConfigToDisk(cfg);
+  return { http: 200, body: { status: "ok", needsRestart: false, created: built.created }, patched: true };
+}
+
+/** Delete a custom MCP server by name. Thin wrapper over upsertMcpServer's
+ *  delete path (used by DELETE /api/plugins/mcp?name=…). */
+export function deleteMcpServer(name: string): McpUpsertResult {
+  return upsertMcpServer({ name, transport: "stdio", action: "delete" });
+}
+
 // ---- Toggle ----------------------------------------------------------------
 
 export interface ToggleRequest {
@@ -767,6 +982,8 @@ export interface AuditRecord {
   pluginType?: PluginType;
   name?: string;
   module?: string;
+  /** MCP transport ("stdio"|"url") — recorded for mcp.* actions. Never a secret. */
+  transport?: string;
   result: string;
 }
 

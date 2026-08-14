@@ -83,3 +83,54 @@ The Slack connector already emits `reaction_added` (subscribe to it in the app;
   request it rather than forking.
 - "Auto importance-marking" (a triage extension) is a model+prompt concern, not a
   tool — coordinate the triage prompt with the core side.
+
+## Registering MCP servers from the Web UI
+
+The Plugins page (`/plugins`, **MCP** tab) can create/update/delete custom MCP
+servers (`config.mcp.custom.<name>`) without hand-editing YAML. The tab is gated
+by the same `requirePluginAdmin` (feature flag `plugins.manageUi: true` +
+`adminGroup` via `X-Forwarded-Groups`, or a loopback connection) as the rest of
+the plugin admin surface. Every mutation is audited (`mcp.upsert` / `mcp.delete`,
+recording only `name` + `transport` — never a secret value).
+
+### Endpoints (gateway)
+
+- `GET /api/plugins` → the summary now includes `mcpServers[]`, each entry
+  **masked**: `{ name, transport:"stdio"|"url", enabled, url? , command?,
+  hasHeaders, hasEnv }`. Header/env values and any URL-embedded token are never
+  returned — only the boolean presence.
+- `POST /api/plugins/mcp` — upsert. Body:
+  `{ name, transport, enabled?, url?, headers?, type?, command?, args?, env? }`.
+  - `name` must match `[a-z0-9-]+`. URL transport requires an `http(s)` `url`
+    (stored with `type: "sse"` as Claude Code requires); stdio transport requires
+    a non-empty `command`.
+  - **Secrets are write-only.** On an EDIT, a blank header/env value **preserves**
+    the stored value (a non-empty value overwrites it, an omitted key drops it).
+    Values are never echoed in the response or the audit record.
+  - `enabled` rides on the same endpoint; only `enabled: false` is written to
+    YAML (absent = enabled).
+- `DELETE /api/plugins/mcp?name=…` (or `POST` with `action:"delete"`) — remove.
+
+### Transports
+
+- **URL (HTTP / SSE remote):** `url` + `headers` (auth). Stored as
+  `{ type:"sse", url, headers }`. Put credentials in `headers`, not the URL.
+- **stdio (local child process):** `command` + `args` (comma/newline split in the
+  form) + `env`. `env` values may use `${VAR}` to defer to a process env var.
+
+### enabled / reload behaviour (no restart)
+
+MCP servers are resolved **per-turn** by `resolveMcpServers(config.mcp, …)`
+(`mcp/resolver.ts`), which already skips any entry with `enabled: false`. Because
+the daemon's chokidar config watcher reloads `config.yaml` and calls
+`sessionManager.setConfig(...)`, a write from this form is picked up on the **next
+turn** — the endpoint returns `needsRestart: false`. No daemon restart is needed
+to add, edit, toggle, or remove an MCP server.
+
+### Which engine consumes MCP tools
+
+MCP tools are invoked by the **engine**, not the connector. Today the `claude`
+engine consumes stdio/HTTP(SSE) MCP servers. `bob` does not support MCP; the
+OpenAI-compatible engines (`AiDEA` / `Kannon`) will consume MCP once their
+tool-call path is implemented. The UI surfaces this as a hint so operators do not
+expect a registered server to take effect under an engine that cannot call it.
