@@ -127,6 +127,32 @@ the daemon's chokidar config watcher reloads `config.yaml` and calls
 turn** — the endpoint returns `needsRestart: false`. No daemon restart is needed
 to add, edit, toggle, or remove an MCP server.
 
+### Built-in `knowledge` server (per-user file IO)
+
+`resolveMcpServers` also injects a built-in **`knowledge`** stdio server
+(`mcp/knowledge-server.ts`, compiled to `dist/src/mcp/knowledge-server.js`) —
+the same wiring shape as the built-in `gateway` server. It is **enabled by
+default**; set `mcp.knowledge.enabled: false` to opt out (`McpGlobalConfig.knowledge`).
+
+It exposes three tools, all confined to `~/.openbanto/knowledge/`:
+
+- `read_knowledge({ path })` — read a knowledge-root-relative file.
+- `write_knowledge({ path, content })` — create/overwrite (parent dirs auto-created).
+- `list_knowledge({ dir? })` — list a directory (names + sizes).
+
+`path`/`dir` are **root-relative only**. Absolute paths, `~`, `..` traversal,
+and symlinks whose real target escapes the root are rejected (`path.resolve`
+prefix check + `realpathSync` on the deepest existing ancestor). Error messages
+never echo the internal absolute path.
+
+**Why it exists**: the OpenAI (AiDEA/Kannon) engine has **no native filesystem
+access** — it can only touch files through MCP. This server is how it persists
+per-user knowledge (`users/<userKey>/profile.md`, `preferences.md`). The `claude`
+engine may use it too, or its native Read/Write — so the context's recording
+instructions (`sessions/context.ts` → `buildEvolutionContext`) are written
+engine-agnostically ("`write_knowledge` … or a direct file write"). See
+`docs/design/per-user-knowledge.md` for the per-user scoping model.
+
 ### Which engine consumes MCP tools
 
 MCP tools are invoked by the **engine**, not the connector. Today the `claude`

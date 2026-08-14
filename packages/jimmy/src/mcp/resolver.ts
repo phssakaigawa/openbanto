@@ -128,6 +128,31 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
     };
   }
 
+  // Knowledge MCP server (built-in, scoped file IO under ~/.openbanto/knowledge/).
+  // Default ON — this is the OpenAI (AiDEA) engine's only path to persist
+  // per-user knowledge, since it has no native filesystem access.
+  if (config.knowledge?.enabled !== false) {
+    const knowledgeMcpPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "..",
+      "..",
+      "dist",
+      "src",
+      "mcp",
+      "knowledge-server.js",
+    );
+    // Only use the dist build if present; otherwise fall back to the sibling
+    // compiled file next to this module.
+    const scriptPath = fs.existsSync(knowledgeMcpPath)
+      ? knowledgeMcpPath
+      : path.resolve(path.dirname(new URL(import.meta.url).pathname), "knowledge-server.js");
+
+    servers.knowledge = {
+      command: "node",
+      args: [scriptPath],
+    };
+  }
+
   // Custom user-defined MCP servers
   if (config.custom) {
     for (const [name, serverConfig] of Object.entries(config.custom)) {

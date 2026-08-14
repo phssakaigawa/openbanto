@@ -47,7 +47,7 @@ Slack 振る舞い系（空気読みトリアージ / `/goal` Stop hook / Agents
 | 変更 | 場所 | 注意 |
 |---|---|---|
 | identity を番頭に | `sessions/context.ts` `buildIdentity()`（番頭 front-of-house / 委譲 / 名前は当て字しない） | 上流が identity 文面を変えたら番頭ペルソナを再適用 |
-| ONBOARDING を「ご記帳」に | `sessions/context.ts` `buildEvolutionContext()`（`isNew` 時の ONBOARDING MODE 文面） | 同上。※オンボ発火条件は `~/.openbanto/knowledge/user-profile.md` が50字未満か否か（`portal.onboarded` は Web ウィザード専用で無関係） |
+| ONBOARDING を「ご記帳」に | `sessions/context.ts` `buildEvolutionContext()`（`isNew` 時の ONBOARDING MODE 文面） | 同上。※オンボ発火条件は **§O で per-user 化**：その発話者の `~/.openbanto/knowledge/users/<userKey>/profile.md` が50字未満か否か（旧グローバル `user-profile.md` は後方互換で operator のみ既知扱い。`portal.onboarded` は Web ウィザード専用で無関係） |
 
 ### D. home リブランド `~/.openbanto`
 | 変更 | 場所 | 注意 |
@@ -175,6 +175,16 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 | 依存追加 | `packages/jimmy/package.json`（`@modelcontextprotocol/sdk ^1.30.0`）＋`pnpm-lock.yaml` | **コア MIT クリーンは維持**（SDK は MIT）。他パッケージと矛盾しない安定版 |
 | 単体テスト（新規） | `engines/__tests__/openai.mcp.test.ts`（①tools 変換＋名前空間 ②tool_calls→MCP callTool→結果を messages→最終 text ③ツール無し=平文 ④abort で両方 close） | 実 HTTP/実 MCP を叩かずモック：`bridgeDeps` で fake Client 注入・`fetch` は stub。secret 非漏洩も assert |
 
+### O. per-user knowledge scoping ＋ scoped「knowledge」MCP サーバ（OpenBanto 独自）
+知識を **単一共有ファイル**（`knowledge/{user-profile,preferences,projects}.md`）から **発話者スコープ**へ。`sessions/context.ts` に `userKey(scope)`（`speakerSlackId` 優先→`speakerName` 正規化→`[a-z0-9_-]` 以外を落とし空なら `unknown`）を導入し、`buildEvolutionContext`/`buildKnowledgeContext` を **その発話者の** `knowledge/users/<userKey>/{profile,preferences}.md` ＋ 組織共通 `knowledge/shared/` に切替。**`isNew`（ご記帳）は per-user**＝その発話者の `profile.md` が50字未満か否か（初対面のユーザだけ挨拶）。後方互換：旧トップレベル `knowledge/*.md` は非破壊で shared 相当として併読、旧単一 `user-profile.md` が充実していれば operator（or 匿名）だけ「既知」扱いで再オンボーディングを防止。記録指示は **エンジン非依存**（claude=native / openai=`write_knowledge`）。あわせて新規 stdio MCP サーバ `mcp/knowledge-server.ts` を **既定 ON**（`mcp.knowledge?.enabled`、`gateway` と同じ配線＝`command:node,args:[knowledge-server.js]`）で追加：`read_knowledge`/`write_knowledge`/`list_knowledge` を **全て `~/.openbanto/knowledge/` にスコープ**、`..`/絶対/`~`/root 外シンボリックリンクを厳格拒否（`path.resolve` prefix ＋ 最深既存祖先の `realpathSync` 検証）、エラーに内部絶対パスを晒さない。→ AiDEA(openai) は MCP ブリッジ経由で、claude は MCP or native で per-user 知識を書ける。詳細は `docs/design/per-user-knowledge.md` / `tools-mcp-wiring.md`。
+
+| 変更 | 場所 | 注意（デグレ源） |
+|---|---|---|
+| per-user 化＋`userKey`（新規） | `sessions/context.ts`（`userKey`/`buildEvolutionContext`/`buildKnowledgeContext` を `SpeakerScope` 受け取りに） | **★`isNew` を per-user profile.md で判定**（グローバル一本に退行させない）。後方互換：旧 `knowledge/*.md` を消さず併読、operator は再オンボしない |
+| knowledge MCP サーバ（新規） | `mcp/knowledge-server.ts`（stdio・hand-rolled JSON-RPC＝`gateway-server.ts` に倣う。`resolveWithinRoot` でトラバーサル拒否） | **★root 逸脱拒否**（`..`/絶対/`~`/シンボリックリンク）。**内部絶対パス非漏洩**（エラー・成功応答とも root-相対のみ）。直接起動時だけ stdin ループ（`isDirectRun` gate＝テスト import で起動しない） |
+| resolver 組込み＋config 型（変更） | `mcp/resolver.ts`（`gateway` 直後に `knowledge` を既定 ON 追加・dist 解決 fallback）＋`shared/types.ts` `McpGlobalConfig.knowledge?:{enabled}` | **★`knowledge.enabled!==false` で per-turn mcpConfig に必ず入る**（dist の `knowledge-server.js` パスが build 出力と一致）。`enabled:false` で skip |
+| 単体テスト（新規） | `sessions/__tests__/user-key.test.ts` / `per-user-knowledge.test.ts` / `mcp/__tests__/knowledge-server.test.ts` ＋ `resolver.test.ts` 追記 | ①`userKey` 正規化 ②per-user `isNew`（片方 new・片方既知）＋listing 隔離 ③トラバーサル拒否＋IO round-trip ④resolver 既定 ON/無効化 |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
@@ -190,6 +200,7 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 6e. **★MCP サーバ登録フォームが生きているか**（`gateway/plugins-api.ts` `summarizeMcpServers` が headers/env 値・URL 内トークンをマスク＝`hasHeaders`/`hasEnv` bool のみ返すか / `buildMcpBlock`+`mergeSecretMap` が編集時 secret 据置（空欄＝維持）か / `upsertMcpServer` が **`pnpm add`/`execFile` を叩かず** config 配線のみか。`gateway/api.ts` の `POST`/`DELETE /api/plugins/mcp` が `requirePluginAdmin` を通し監査に**値を出さない**か。`mcp/resolver.ts` が `enabled:false` を skip したままか。反映は per-turn＝`needsRestart:false`）
 6d. **★汎用 OpenAI 互換エンジンが生きているか**（`engines/registry.ts` の impl 解決＝`resolveEngine(name, block)` 第3経路・`IMPL_PLUGINS.openai`・`engineImplOf` が残っているか。`gateway/server.ts` の engine map 列挙が `impl` を拾うか。`shared/models.ts` `addImplEngineEntries` で /model picker に出るか。`gateway/plugins-api.ts` `upsertOpenAiEngine` が **pnpm add を叩かず** apiKey を据置更新・非漏洩のままか。`openai.ts` が abort→`interrupted`・apiKey 非ログか）
 6f. **★OpenAI 互換エンジンの MCP tool-call が生きているか**（`engines/openai.ts` が `mcpConfigPath` から `mcp/tool-bridge.ts` `McpToolBridge` 経由でツールを取得し、`"<server>__<tool>"` 名前空間で OpenAI `tools` 化・非 stream tool-call ループ（8 ラウンド上限）を回すか。ツール無し／config 無しは `runStreaming` で従来平文挙動のままか。`kill`/`killAll`/`finally` が MCP クライアントを close しリークしないか。stdio と URL(SSE/HTTP) 両 transport を扱い接続失敗を握って skip・**env/headers 値を非ログ**か。`@modelcontextprotocol/sdk` が jimmy 依存に残り、`tsc --noEmit` 0 エラーか）
+6g. **★per-user knowledge scoping が生きているか**（`sessions/context.ts` `userKey()` が `speakerSlackId`優先→`speakerName`正規化→空は `unknown` のままか。`buildEvolutionContext` の **`isNew` が per-user `users/<userKey>/profile.md` 50字未満**で判定され、グローバル一本に退行していないか。旧 `knowledge/*.md` を **非破壊**で shared 併読し operator を再オンボしないか。組込み **`knowledge` MCP サーバ**が `mcp/resolver.ts` で **既定 ON**（`config.knowledge?.enabled!==false`）・dist の `knowledge-server.js` を解決し、`read/write/list_knowledge` が **`~/.openbanto/knowledge/` にスコープ**され `..`/絶対/`~`/root外シンボリックリンクを拒否・**内部絶対パス非漏洩**か。`McpGlobalConfig.knowledge?` が `types.ts` に残るか）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）
 
