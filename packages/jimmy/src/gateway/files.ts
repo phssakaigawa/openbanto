@@ -253,6 +253,32 @@ async function handleJsonUpload(req: HttpRequest, res: ServerResponse, context: 
   }
 }
 
+/**
+ * Register an already-local file into managed storage so it is retrievable at
+ * `GET /api/files/:id`. Returns the file metadata (incl. the id). Used to expose
+ * a downloaded chat attachment at a stable URL so an external vision/OCR 職人
+ * (e.g. Qwen3-VL on dev6) can fetch it — the maintainer's tool takes a URL, and
+ * the Slack `url_private` is behind a bot-token wall it can't pass. Best-effort
+ * caller decides the public base URL (gateway.publicFileBaseUrl).
+ */
+export function registerLocalFile(localPath: string, filename?: string): FileMeta {
+  const id = crypto.randomUUID();
+  const name = filename || path.basename(localPath);
+  const buffer = fs.readFileSync(localPath);
+  const fileDir = path.join(FILES_DIR, id);
+  fs.mkdirSync(fileDir, { recursive: true });
+  fs.writeFileSync(path.join(fileDir, name), buffer);
+  const meta = insertFile({
+    id,
+    filename: name,
+    size: buffer.length,
+    mimetype: mimeFromFilename(name),
+    path: null,
+  });
+  logger.info(`File registered from attachment: ${name} (${id}, ${buffer.length} bytes)`);
+  return meta;
+}
+
 // ── Transfer types ──────────────────────────────────────────────
 
 interface TransferSpec {

@@ -9,6 +9,7 @@ import type {
   Target,
 } from "../shared/types.js";
 import { scanOrg, extractMention } from "../gateway/org.js";
+import { registerLocalFile } from "../gateway/files.js";
 import {
   accumulateSessionCost,
   createSession,
@@ -585,6 +586,34 @@ export class SessionManager {
               : ` — NOT the operator; do not address this person as "${operator}"`
             : "";
           promptToRun = `[Speaker: ${safeName}${tag}]\n${promptToRun}`;
+        }
+      }
+
+      // Vision-職人 hand-off: expose image attachments at a gateway URL that a
+      // non-local vision/OCR 職人 (e.g. Qwen3-VL on dev6) can fetch — the Slack
+      // url_private is behind the bot token it can't pass. Register each image
+      // into /api/files and inject the reachable URL so a non-VLM engine
+      // (AiDEA/DeepSeek) can hand it to a describe_image tool. Gated on
+      // gateway.publicFileBaseUrl; skipped for claude (reads the local file
+      // directly, and has no describe_image tool).
+      const fileBaseUrl = this.config.gateway?.publicFileBaseUrl?.replace(/\/+$/, "");
+      if (fileBaseUrl && session.engine !== "claude") {
+        const imageUrls: string[] = [];
+        for (const att of msg.attachments || []) {
+          if (att.localPath && typeof att.mimeType === "string" && att.mimeType.toLowerCase().startsWith("image/")) {
+            try {
+              const meta = registerLocalFile(att.localPath, att.name);
+              imageUrls.push(`${fileBaseUrl}/api/files/${meta.id}`);
+            } catch (err) {
+              logger.warn(`[vision] failed to register image attachment: ${err}`);
+            }
+          }
+        }
+        if (imageUrls.length > 0) {
+          logger.info(`[vision] exposed ${imageUrls.length} image URL(s) for ${session.id}: ${imageUrls.join(", ")}`);
+          promptToRun +=
+            `\n\n[添付画像] 次のURLで画像を取得できます。内容を読む必要があれば「目」の職人（describe_image ツール）にこのURLを渡し、読み取ってから回答してください:\n` +
+            imageUrls.map((u) => `- ${u}`).join("\n");
         }
       }
 

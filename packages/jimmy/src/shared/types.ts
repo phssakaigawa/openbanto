@@ -590,7 +590,18 @@ export interface EngineConfigBlock {
 
 export interface JinnConfig {
   jinn?: { version?: string };
-  gateway: { port: number; host: string; streaming?: boolean };
+  gateway: {
+    port: number;
+    host: string;
+    streaming?: boolean;
+    /** Base URL at which this gateway's `GET /api/files/:id` is reachable by an
+     *  EXTERNAL vision/OCR 職人 (e.g. Qwen3-VL on dev6). When set, image
+     *  attachments are registered into /api/files and their URL is injected into
+     *  the prompt so a non-local engine (AiDEA/DeepSeek) can hand it to a
+     *  describe_image tool. Unset → no-op (local-fs engines like claude read the
+     *  file directly). Example: "http://192.168.93.144:7777". */
+    publicFileBaseUrl?: string;
+  };
   engines: {
     /** Default engine for new sessions. Known built-ins are offered for
      *  completion; any string is accepted so an external engine plugin
