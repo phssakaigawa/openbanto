@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { EngineResult } from "../types.js";
-import { isDeadSessionError, detectRateLimit, isPoisonedTranscriptError, isTransientServerError } from "../rateLimit.js";
+import { isDeadSessionError, detectRateLimit, isEmptyOrTimeoutResult, isPoisonedTranscriptError, isTransientServerError } from "../rateLimit.js";
 
 function makeResult(overrides: Partial<EngineResult> = {}): EngineResult {
   return {
@@ -182,5 +182,35 @@ describe("isTransientServerError", () => {
       error: "Interactive turn failed: server_error",
       rateLimit: { status: "rejected" },
     }))).toBe(false);
+  });
+});
+
+describe("isEmptyOrTimeoutResult", () => {
+  it("returns true for a truly empty turn (no result, no error)", () => {
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: undefined }))).toBe(true);
+  });
+
+  it("returns true for a non-interrupt timeout error with no result", () => {
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "engine request timed out after 120s" }))).toBe(true);
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "Timeout waiting for response" }))).toBe(true);
+  });
+
+  it("returns false when there is result text to deliver", () => {
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "here is the answer" }))).toBe(false);
+    // even if a timeout error is also present, a partial result is deliverable
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "partial", error: "timed out" }))).toBe(false);
+  });
+
+  it("returns false for interrupted turns (deliberate stop, incl. interactive turn timeout)", () => {
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "Interrupted: interactive turn timed out" }))).toBe(false);
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "Interrupted by user" }))).toBe(false);
+  });
+
+  it("returns false for a rate-limited result (handled by its own path)", () => {
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "timed out", rateLimit: { status: "rejected" } }))).toBe(false);
+  });
+
+  it("returns false for a non-empty, non-timeout error (dead/other errors flow on)", () => {
+    expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "Claude exited with code 1" }))).toBe(false);
   });
 });

@@ -30,7 +30,7 @@ import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
 import { resolveEngineConfig, engineIsInteractive, engineSupportsSyncResume } from "../engines/registry.js";
 import type { Guardrail, GuardrailContext } from "../guardrails/registry.js";
-import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
+import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isEmptyOrTimeoutResult, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { loadJobs } from "../cron/jobs.js";
@@ -668,6 +668,42 @@ export class SessionManager {
         attachments: attachments.length > 0 ? attachments : undefined,
         sessionId: session.id,
       });
+
+      // Empty / timeout retry: when the engine returns nothing usable — neither
+      // result text nor an error (the "(No response from engine)" case), or a
+      // non-interrupt timeout — resend the SAME prompt on the SAME engine session
+      // a bounded number of times before giving up. This runs BEFORE the
+      // poisoned/dead/transient/rate-limit detectors below; those all carry
+      // distinct error signatures, so a genuinely-empty/timeout result is the
+      // only thing this loop acts on and a recovered result flows on normally.
+      {
+        const maxEmptyRetries = this.config.sessions?.emptyResponseRetries ?? 2;
+        for (
+          let emptyAttempt = 1;
+          emptyAttempt <= maxEmptyRetries && isEmptyOrTimeoutResult(result);
+          emptyAttempt++
+        ) {
+          logger.warn(
+            `Session ${session.id} got no/timed-out engine response — resending prompt (attempt ${emptyAttempt}/${maxEmptyRetries})`,
+          );
+          updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+          result = await engine.run({
+            prompt: promptToRun,
+            resumeSessionId: result.sessionId?.trim() || session.engineSessionId || undefined,
+            systemPrompt,
+            cwd: JINN_HOME,
+            bin: engineConfig.bin,
+            model: session.model ?? engineConfig.model,
+            effortLevel,
+            cliFlags: employee?.cliFlags,
+            sshHost: employee?.sshHost,
+            remoteCwd: employee?.remoteCwd,
+            mcpConfigPath,
+            attachments: attachments.length > 0 ? attachments : undefined,
+            sessionId: session.id,
+          });
+        }
+      }
 
       let wasInterrupted = result.error?.startsWith("Interrupted");
 

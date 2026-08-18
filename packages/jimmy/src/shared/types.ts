@@ -652,6 +652,11 @@ export interface JinnConfig {
      *  same engine session with a continuation prompt. Default: [30s, 120s, 300s].
      *  Set to [] to disable. */
     transientRetryDelaysMs?: number[];
+    /** How many times to resend the SAME prompt when a turn comes back with no
+     *  usable response — no result text and no error (the "(No response from
+     *  engine)" case), or a non-interrupt timeout. Resumes the same engine
+     *  session each time. Default: 2 (up to 3 total attempts). Set 0 to disable. */
+    emptyResponseRetries?: number;
     /** Deliver late/background engine output (a Stop hook that fires after the
      *  turn already settled — e.g. a background sub-agent finishing) back to the
      *  session's conversation. Default: true. */
