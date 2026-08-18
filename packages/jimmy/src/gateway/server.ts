@@ -446,6 +446,11 @@ export async function startGateway(
           allowFrom: c.slack.allowFrom,
           ignoreOldMessagesOnBoot: c.slack.ignoreOldMessagesOnBoot,
           triage: c.slack.triage,
+          // respondTo MUST be forwarded — the SlackConnector reads config.respondTo
+          // and falls back to "always" when it's absent. Omitting it here made the
+          // mention gate a no-op (bot replied to everything) even though the value
+          // was present in config.yaml / GET /api/config.
+          respondTo: c.slack.respondTo,
           goalExtraction: c.slack.goalExtraction,
           agentsCanvas: c.slack.agentsCanvas,
         },
