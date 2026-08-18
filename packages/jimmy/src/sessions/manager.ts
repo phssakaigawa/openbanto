@@ -8,6 +8,7 @@ import type {
   Session,
   Target,
 } from "../shared/types.js";
+import { scanOrg, extractMention } from "../gateway/org.js";
 import {
   accumulateSessionCost,
   createSession,
@@ -215,10 +216,53 @@ export class SessionManager {
     return this.queue;
   }
 
+  /**
+   * Pick the 職人 (employee) that should handle a message when the connector
+   * didn't bind one. Priority: an explicit `@<employee>` mention in the text,
+   * then — for image attachments — the configured vision employee
+   * (`sessions.imageEmployee`). Returns undefined to fall through to the default
+   * engine. Best-effort: any failure just falls through.
+   */
+  private resolveMessageEmployee(msg: IncomingMessage): Employee | undefined {
+    try {
+      const registry = scanOrg();
+      if (registry.size === 0) return undefined;
+      const mentioned = extractMention(msg.text || "", registry);
+      if (mentioned) return mentioned;
+      const hasImage = (msg.attachments || []).some(
+        (a) => typeof a.mimeType === "string" && a.mimeType.toLowerCase().startsWith("image/"),
+      );
+      if (hasImage) {
+        const key = this.config.sessions?.imageEmployee;
+        if (key) {
+          const emp = registry.get(key);
+          if (emp) return emp;
+          logger.warn(`[route] sessions.imageEmployee "${key}" not found in org directory`);
+        }
+      }
+    } catch (err) {
+      logger.debug(`[route] resolveMessageEmployee failed: ${err}`);
+    }
+    return undefined;
+  }
+
   async route(msg: IncomingMessage, connector: Connector, opts: RouteOptions = {}): Promise<{ sessionId: string } | void> {
     if (await this.handleCommand(msg, connector)) return;
 
     let session = getSessionBySessionKey(msg.sessionKey);
+    // Per-message 職人/engine routing (NEW sessions only — a session's engine is
+    // fixed at creation). The connector binds at most one employee, so this lets a
+    // single Slack app dispatch to different 職人/engines: an explicit @employee
+    // mention, or an image attachment → the configured vision employee
+    // (sessions.imageEmployee, e.g. a claude-backed 名刺係). Plain text with no
+    // match stays on the default engine (AiDEA). No-op when org/ is empty.
+    if (!session && !opts.employee) {
+      const routed = this.resolveMessageEmployee(msg);
+      if (routed) {
+        opts = { ...opts, employee: routed };
+        logger.info(`[route] auto-routed ${msg.sessionKey} → 職人 "${routed.name}" (engine: ${routed.engine})`);
+      }
+    }
     if (!session) {
       session = createSession({
         engine: opts.engine ?? opts.employee?.engine ?? this.config.engines.default,

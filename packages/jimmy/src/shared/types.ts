@@ -661,6 +661,11 @@ export interface JinnConfig {
      *  wedged engine a beat to recover and avoids a tight resend loop. Kept short
      *  (unlike transientRetryDelaysMs). Default: 1500. Set 0 for no delay. */
     emptyResponseRetryDelayMs?: number;
+    /** Name of the 職人 (org employee) that image-bearing messages auto-route to
+     *  when the connector didn't bind an employee and no `@employee` is mentioned.
+     *  Lets a single Slack app send photos to a vision-capable (e.g. claude-backed)
+     *  worker while plain text stays on the default engine. Unset → no auto-routing. */
+    imageEmployee?: string;
     /** Opt-in: also retry the interactive engine's hard-turn timeout
      *  ("Interrupted: interactive turn timed out"). OFF by default because that
      *  turn genuinely occupied the engine (up to interactiveTurnTimeoutMs) — a
