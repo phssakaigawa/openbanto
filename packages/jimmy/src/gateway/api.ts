@@ -363,15 +363,77 @@ function serverError(res: ServerResponse, message: string): void {
   json(res, { error: message }, 500);
 }
 
-const SANITIZED_KEYS = new Set(["token", "botToken", "signingSecret", "appToken"]);
+/** Placeholder written over every secret in GET /api/config responses. */
+export const SECRET_MASK = "***";
+
+/**
+ * Field names whose value is a secret and must never leave the gateway in the
+ * clear. Matched case-insensitively. Extend this — NOT the ad-hoc connector
+ * loop — when a new secret-bearing config field is introduced.
+ */
+const SECRET_KEY_NAMES = new Set(
+  [
+    "token",
+    "botToken",
+    "appToken",
+    "signingSecret",
+    "apiKey",
+    "password",
+    "secret",
+    "clientSecret",
+    "callbackHmacSecret",
+    "storeEncKey",
+    "hmacSecret",
+  ].map((k) => k.toLowerCase()),
+);
+
+/**
+ * Object keys whose *every* string child is a secret regardless of the child's
+ * name — auth `headers` (e.g. `Authorization: Bearer …`) and process `env`
+ * blocks for stdio MCP servers. `env`/`headers` free-form maps can't be covered
+ * by SECRET_KEY_NAMES, so we mask the whole map.
+ */
+const SECRET_CONTAINER_KEYS = new Set(["headers", "env"]);
+
+/**
+ * Recursively deep-clone `value`, replacing every secret with SECRET_MASK so a
+ * config snapshot is safe to hand to the Settings UI / any `/api/config`
+ * caller. Round-trips safely: a masked value PUT back is ignored by deepMerge
+ * (which skips any incoming `"***"`), preserving the real on-disk secret.
+ */
+export function maskConfigSecrets(
+  value: unknown,
+  keyName?: string,
+  inSecretContainer = false,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((v) => maskConfigSecrets(v, keyName, inSecretContainer));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const childInContainer =
+        inSecretContainer || SECRET_CONTAINER_KEYS.has(k);
+      out[k] = maskConfigSecrets(v, k, childInContainer);
+    }
+    return out;
+  }
+  // Primitive: mask non-empty secret-bearing values, leave everything else.
+  if (value === undefined || value === null || value === "") return value;
+  if (inSecretContainer && typeof value === "string") return SECRET_MASK;
+  if (keyName && SECRET_KEY_NAMES.has(keyName.toLowerCase())) return SECRET_MASK;
+  return value;
+}
 
 export function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
   const result = { ...target };
   for (const key of Object.keys(source)) {
     const sv = source[key];
     const tv = target[key];
-    // Skip sanitized secret placeholders — keep original value
-    if (SANITIZED_KEYS.has(key) && sv === "***") continue;
+    // Skip masked secret placeholders — keep original value. Applies to ANY
+    // key so masked apiKey / headers.Authorization / env secrets round-trip
+    // through a full-config PUT without being wiped.
+    if (sv === SECRET_MASK) continue;
     if (Array.isArray(sv)) {
       // For arrays (e.g. instances), preserve secrets from matching items
       if (Array.isArray(tv)) {
@@ -1672,34 +1734,11 @@ Handle this as a priority request from a colleague.`;
     // GET /api/config
     if (method === "GET" && pathname === "/api/config") {
       const config = context.getConfig();
-      // Sanitize: remove any secrets/tokens from connectors
-      const rawConnectors = config.connectors || {};
-      const sanitizedConnectors: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(rawConnectors)) {
-        if (k === "instances" && Array.isArray(v)) {
-          sanitizedConnectors.instances = v.map((inst: any) => ({
-            ...inst,
-            token: inst?.token ? "***" : undefined,
-            signingSecret: inst?.signingSecret ? "***" : undefined,
-            botToken: inst?.botToken ? "***" : undefined,
-            appToken: inst?.appToken ? "***" : undefined,
-          }));
-        } else if (v && typeof v === "object") {
-          sanitizedConnectors[k] = {
-            ...v,
-            token: (v as any)?.token ? "***" : undefined,
-            signingSecret: (v as any)?.signingSecret ? "***" : undefined,
-            botToken: (v as any)?.botToken ? "***" : undefined,
-            appToken: (v as any)?.appToken ? "***" : undefined,
-          };
-        } else {
-          sanitizedConnectors[k] = v;
-        }
-      }
-      const sanitized = {
-        ...config,
-        connectors: sanitizedConnectors,
-      };
+      // Mask EVERY secret before it leaves the gateway — connector tokens,
+      // engine apiKey (AiDEA/OpenAI), MCP auth headers (Authorization) and
+      // stdio-MCP env blocks. See maskConfigSecrets(); masked values round-trip
+      // safely through PUT /api/config (deepMerge ignores "***").
+      const sanitized = maskConfigSecrets(config);
       return json(res, sanitized);
     }
 
