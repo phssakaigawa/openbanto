@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { EngineResult } from "../types.js";
-import { isDeadSessionError, detectRateLimit, isEmptyOrTimeoutResult, isPoisonedTranscriptError, isTransientServerError } from "../rateLimit.js";
+import { isDeadSessionError, detectRateLimit, isEmptyOrTimeoutResult, isInteractiveTurnTimeout, isPoisonedTranscriptError, isTransientServerError } from "../rateLimit.js";
 
 function makeResult(overrides: Partial<EngineResult> = {}): EngineResult {
   return {
@@ -212,5 +212,27 @@ describe("isEmptyOrTimeoutResult", () => {
 
   it("returns false for a non-empty, non-timeout error (dead/other errors flow on)", () => {
     expect(isEmptyOrTimeoutResult(makeResult({ result: "", error: "Claude exited with code 1" }))).toBe(false);
+  });
+});
+
+describe("isInteractiveTurnTimeout", () => {
+  it("matches the interactive engine's force-settled turn timeout", () => {
+    expect(isInteractiveTurnTimeout(makeResult({ result: "", error: "Interrupted: interactive turn timed out" }))).toBe(true);
+  });
+
+  it("does not match a plain interrupt or other timeouts", () => {
+    expect(isInteractiveTurnTimeout(makeResult({ result: "", error: "Interrupted by user" }))).toBe(false);
+    expect(isInteractiveTurnTimeout(makeResult({ result: "", error: "request timed out" }))).toBe(false);
+    expect(isInteractiveTurnTimeout(makeResult({ result: "", error: undefined }))).toBe(false);
+  });
+
+  it("does not match when there is deliverable result text", () => {
+    expect(isInteractiveTurnTimeout(makeResult({ result: "done", error: "Interrupted: interactive turn timed out" }))).toBe(false);
+  });
+
+  it("is excluded from isEmptyOrTimeoutResult (its own opt-in path)", () => {
+    const r = makeResult({ result: "", error: "Interrupted: interactive turn timed out" });
+    expect(isEmptyOrTimeoutResult(r)).toBe(false);
+    expect(isInteractiveTurnTimeout(r)).toBe(true);
   });
 });

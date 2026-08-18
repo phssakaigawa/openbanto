@@ -113,6 +113,21 @@ export function isEmptyOrTimeoutResult(result: EngineResult): boolean {
   return TIMEOUT_ERROR_RE.test(err);
 }
 
+const INTERACTIVE_TURN_TIMEOUT_RE = /Interrupted:\s*interactive turn timed out/i;
+
+/**
+ * The interactive (PTY) engine's hard-turn timeout, force-settled as
+ * "Interrupted: interactive turn timed out". Modeled as an interrupt (a
+ * deliberate stop), so isEmptyOrTimeoutResult() excludes it. Retried only when
+ * `sessions.retryInteractiveTimeout` is opted in — and then with a continuation
+ * prompt, never a verbatim resend, to avoid repeating completed work.
+ */
+export function isInteractiveTurnTimeout(result: EngineResult): boolean {
+  if (!result.error) return false;
+  if (result.result?.trim()) return false;
+  return INTERACTIVE_TURN_TIMEOUT_RE.test(result.error);
+}
+
 export function detectRateLimit(result: EngineResult): RateLimitDetection {
   const resetsAt = typeof result.rateLimit?.resetsAt === "number"
     ? result.rateLimit.resetsAt

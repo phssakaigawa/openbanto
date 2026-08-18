@@ -95,10 +95,12 @@ not in your plugin, and applies to every connector uniformly:
 - **Empty / timeout retry is core-owned.** When a turn returns nothing usable —
   no result text *and* no error (the `(No response from engine)` case), or a
   non-interrupt timeout — the core resends the **same** prompt on the **same**
-  engine session up to `sessions.emptyResponseRetries` times (default `2`) before
-  handing you text to deliver. **Do not re-implement this**; a connector cannot
-  re-invoke the engine, and re-sending the inbound message would double-charge
-  and duplicate tool side effects.
+  engine session up to `sessions.emptyResponseRetries` times (default `2`,
+  `sessions.emptyResponseRetryDelayMs` between attempts) before handing you text
+  to deliver. **Do not re-implement this**; a connector cannot re-invoke the
+  engine, and re-sending the inbound message would double-charge and duplicate
+  tool side effects. (These knobs, plus `retryInteractiveTimeout`, are editable
+  from the Settings UI.)
 
 When authoring a connector, make your **own** I/O reliable so those retries reach
 users:

@@ -146,6 +146,10 @@ interface Config {
     interruptOnNewMessage?: boolean
     rateLimitStrategy?: "wait" | "fallback"
     fallbackEngine?: "codex" | "bob"
+    emptyResponseRetries?: number
+    emptyResponseRetryDelayMs?: number
+    retryInteractiveTimeout?: boolean
+    transientRetryDelaysMs?: number[]
   }
   connectors?: {
     slack?: {
@@ -1353,6 +1357,146 @@ export default function SettingsPage() {
                 >
                   「待機」は Claude のリセットを待ってからセッションを自動再開します。
                   「切り替え」は即座に GPT で応答し、リセット後に Claude へ戻します。
+                </div>
+
+                {(config.sessions?.rateLimitStrategy ?? "fallback") === "fallback" && (
+                  <FieldRow label="切り替え先エンジン">
+                    <SettingsSelect
+                      value={config.sessions?.fallbackEngine ?? "codex"}
+                      onChange={(v) =>
+                        updateConfig(["sessions", "fallbackEngine"], v)
+                      }
+                      options={[
+                        { value: "codex", label: "GPT (Codex)" },
+                        { value: "bob", label: "IBM Bob" },
+                      ]}
+                    />
+                  </FieldRow>
+                )}
+
+                {/* -- Reliability / retry -- */}
+                <div
+                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
+                />
+                <div
+                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
+                >
+                  信頼性・リトライ
+                </div>
+
+                <FieldRow label="応答なし時の再送回数">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.sessions?.emptyResponseRetries ?? 2)}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["sessions", "emptyResponseRetries"],
+                        Math.max(0, Math.min(5, Math.floor(Number(v) || 0))),
+                      )
+                    }
+                    placeholder="2"
+                  />
+                </FieldRow>
+                <div
+                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
+                >
+                  エンジンが「応答なし（result も error も空）」または非中断タイムアウトを返したとき、
+                  同じメッセージを同じセッションに再送する回数（0〜5・既定2＝最大3試行）。0で無効。
+                </div>
+
+                <FieldRow label="再送間隔 (ms)">
+                  <SettingsInput
+                    type="number"
+                    value={String(config.sessions?.emptyResponseRetryDelayMs ?? 1500)}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["sessions", "emptyResponseRetryDelayMs"],
+                        Math.max(0, Math.floor(Number(v) || 0)),
+                      )
+                    }
+                    placeholder="1500"
+                  />
+                </FieldRow>
+                <div
+                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
+                >
+                  各再送の前に待つ時間。瞬断中のエンジンに回復の猶予を与えます（既定1500ms）。
+                </div>
+
+                <FieldRow label="対話タイムアウトも再送（上級）">
+                  <ToggleSwitch
+                    checked={config.sessions?.retryInteractiveTimeout ?? false}
+                    onChange={(v) =>
+                      updateConfig(["sessions", "retryInteractiveTimeout"], v)
+                    }
+                  />
+                </FieldRow>
+                <div
+                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
+                >
+                  対話（PTY）エンジンのハードタイムアウトも再送対象にします。その回は実際にエンジンを
+                  長時間占有しているため、再送は「同じ送信」ではなく「続きから完了させる」継続プロンプトで行い、
+                  作業の二重実行を避けます。既定はOFF。
+                </div>
+
+                {/* -- Session limits & transient backoff -- */}
+                <div
+                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
+                />
+                <FieldRow label="セッション上限時間 (分)">
+                  <SettingsInput
+                    type="number"
+                    value={
+                      config.sessions?.maxDurationMinutes !== undefined
+                        ? String(config.sessions.maxDurationMinutes)
+                        : ""
+                    }
+                    onChange={(v) =>
+                      updateConfig(
+                        ["sessions", "maxDurationMinutes"],
+                        v === "" ? undefined : Math.max(0, Math.floor(Number(v) || 0)),
+                      )
+                    }
+                    placeholder="無制限"
+                  />
+                </FieldRow>
+                <FieldRow label="セッション上限コスト (USD)">
+                  <SettingsInput
+                    type="number"
+                    value={
+                      config.sessions?.maxCostUsd !== undefined
+                        ? String(config.sessions.maxCostUsd)
+                        : ""
+                    }
+                    onChange={(v) =>
+                      updateConfig(
+                        ["sessions", "maxCostUsd"],
+                        v === "" ? undefined : Math.max(0, Number(v) || 0),
+                      )
+                    }
+                    placeholder="無制限"
+                  />
+                </FieldRow>
+                <FieldRow label="サーバ一時障害の再試行間隔 (ms)">
+                  <SettingsInput
+                    value={(config.sessions?.transientRetryDelaysMs ?? [30000, 120000, 300000]).join(", ")}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["sessions", "transientRetryDelaysMs"],
+                        v
+                          .split(",")
+                          .map((s) => Number(s.trim()))
+                          .filter((n) => !isNaN(n) && n >= 0),
+                      )
+                    }
+                    placeholder="30000, 120000, 300000"
+                  />
+                </FieldRow>
+                <div
+                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
+                >
+                  Anthropic の一時的なサーバエラー（5xx/529）後に、同一セッションを継続再開する待機列（ms・カンマ区切り）。
+                  1エントリにつき1回。空 <code>[]</code> で無効。
                 </div>
               </Section>
 

@@ -657,6 +657,17 @@ export interface JinnConfig {
      *  engine)" case), or a non-interrupt timeout. Resumes the same engine
      *  session each time. Default: 2 (up to 3 total attempts). Set 0 to disable. */
     emptyResponseRetries?: number;
+    /** Delay (ms) to wait before each empty/timeout resend. Gives a momentarily
+     *  wedged engine a beat to recover and avoids a tight resend loop. Kept short
+     *  (unlike transientRetryDelaysMs). Default: 1500. Set 0 for no delay. */
+    emptyResponseRetryDelayMs?: number;
+    /** Opt-in: also retry the interactive engine's hard-turn timeout
+     *  ("Interrupted: interactive turn timed out"). OFF by default because that
+     *  turn genuinely occupied the engine (up to interactiveTurnTimeoutMs) — a
+     *  verbatim resend risks duplicating tool side effects and another long wait.
+     *  When enabled, the retry uses a CONTINUATION prompt (not a verbatim resend)
+     *  so completed work is not repeated. Default: false. */
+    retryInteractiveTimeout?: boolean;
     /** Deliver late/background engine output (a Stop hook that fires after the
      *  turn already settled — e.g. a background sub-agent finishing) back to the
      *  session's conversation. Default: true. */

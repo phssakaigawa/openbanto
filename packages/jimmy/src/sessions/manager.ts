@@ -30,7 +30,7 @@ import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
 import { resolveEngineConfig, engineIsInteractive, engineSupportsSyncResume } from "../engines/registry.js";
 import type { Guardrail, GuardrailContext } from "../guardrails/registry.js";
-import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isEmptyOrTimeoutResult, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
+import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isEmptyOrTimeoutResult, isInteractiveTurnTimeout, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { loadJobs } from "../cron/jobs.js";
@@ -676,19 +676,41 @@ export class SessionManager {
       // poisoned/dead/transient/rate-limit detectors below; those all carry
       // distinct error signatures, so a genuinely-empty/timeout result is the
       // only thing this loop acts on and a recovered result flows on normally.
+      //
+      // Opt-in (sessions.retryInteractiveTimeout): also retry the interactive
+      // engine's hard-turn timeout, but with a CONTINUATION prompt rather than a
+      // verbatim resend — that turn may have done real work, so we ask it to
+      // finish rather than start over and duplicate side effects.
       {
         const maxEmptyRetries = this.config.sessions?.emptyResponseRetries ?? 2;
+        const retryDelayMs = this.config.sessions?.emptyResponseRetryDelayMs ?? 1500;
+        const retryInteractiveTimeout = this.config.sessions?.retryInteractiveTimeout ?? false;
+        const isRetriable = () =>
+          isEmptyOrTimeoutResult(result) ||
+          (retryInteractiveTimeout && isInteractiveTurnTimeout(result));
+
         for (
           let emptyAttempt = 1;
-          emptyAttempt <= maxEmptyRetries && isEmptyOrTimeoutResult(result);
+          emptyAttempt <= maxEmptyRetries && isRetriable();
           emptyAttempt++
         ) {
+          const continuation = isInteractiveTurnTimeout(result);
           logger.warn(
-            `Session ${session.id} got no/timed-out engine response — resending prompt (attempt ${emptyAttempt}/${maxEmptyRetries})`,
+            `Session ${session.id} got ${continuation ? "an interactive-turn timeout" : "no/timed-out engine response"} — ${continuation ? "continuing" : "resending prompt"} (attempt ${emptyAttempt}/${maxEmptyRetries})`,
           );
-          updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+          // Short wait with heartbeat so the stuck-session reconciler doesn't
+          // treat this backoff as a wedged "running" turn.
+          for (let waited = 0; waited < retryDelayMs; waited += 20_000) {
+            updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+            await new Promise((r) => setTimeout(r, Math.min(20_000, retryDelayMs - waited)));
+          }
+          if (retryDelayMs <= 0) {
+            updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+          }
           result = await engine.run({
-            prompt: promptToRun,
+            prompt: continuation
+              ? "The previous turn timed out before it finished. The conversation history is intact. Continue and complete the original request now; if the work was already finished, reply with the final result."
+              : promptToRun,
             resumeSessionId: result.sessionId?.trim() || session.engineSessionId || undefined,
             systemPrompt,
             cwd: JINN_HOME,

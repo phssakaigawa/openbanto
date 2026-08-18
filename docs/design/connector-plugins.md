@@ -116,9 +116,15 @@ connector (Slack, Discord, LINE WORKS, …):
   no result text *and* no error (the `(No response from engine)` case), or a
   non-interrupt timeout — the core resends the **same** prompt on the **same**
   engine session up to `sessions.emptyResponseRetries` times (default 2 → 3
-  total attempts) before delivering. This composes with, and runs before, the
+  total attempts), waiting `sessions.emptyResponseRetryDelayMs` (default 1500ms)
+  before each resend, then delivers. This composes with, and runs before, the
   existing dead-session / poisoned-transcript / transient-5xx / rate-limit
-  recovery paths, which each own their distinct error signatures.
+  recovery paths, which each own their distinct error signatures. The
+  interactive engine's hard-turn timeout is excluded by default (it's a
+  deliberate long-occupancy stop); `sessions.retryInteractiveTimeout` opts it in
+  and then retries with a **continuation** prompt, not a verbatim resend, so
+  completed work isn't repeated. All four knobs are editable from the Settings
+  UI (セッション → 信頼性・リトライ) as well as `~/.openbanto/config.yaml`.
 
 Checklist for a connector author — do **not** re-implement engine retry; instead
 make the connector's own I/O reliable so the core's retries actually reach users:
