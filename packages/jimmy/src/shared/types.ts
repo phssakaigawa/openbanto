@@ -336,7 +336,7 @@ export interface McpGlobalConfig {
   /**
    * Built-in scoped knowledge server: read/write/list files under
    * `~/.openbanto/knowledge/`. Enabled by default (omit or `enabled: true`);
-   * set `enabled: false` to opt out. This is how the OpenAI (AiDEA) engine —
+   * set `enabled: false` to opt out. This is how the OpenAI-compatible engine —
    * which has no native filesystem access — records per-user knowledge.
    */
   knowledge?: {
@@ -595,11 +595,11 @@ export interface JinnConfig {
     host: string;
     streaming?: boolean;
     /** Base URL at which this gateway's `GET /api/files/:id` is reachable by an
-     *  EXTERNAL vision/OCR 職人 (e.g. Qwen3-VL on dev6). When set, image
+     *  EXTERNAL vision/OCR 職人 (e.g. an external vision/OCR service). When set, image
      *  attachments are registered into /api/files and their URL is injected into
-     *  the prompt so a non-local engine (AiDEA/DeepSeek) can hand it to a
+     *  the prompt so a non-local engine (an OpenAI-compatible LLM) can hand it to a
      *  describe_image tool. Unset → no-op (local-fs engines like claude read the
-     *  file directly). Example: "http://192.168.93.144:7777". */
+     *  file directly). Example: "http://gateway.internal:7777". */
     publicFileBaseUrl?: string;
   };
   engines: {

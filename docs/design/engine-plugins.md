@@ -1,7 +1,7 @@
 # Design: Pluggable Engines
 
 Status: **Phase 1+2 landed** (OpenBanto-original feature — see
-`../upstream-port/BANTO-PORT-PLAN.md`). Phase 3 (HTTP/aidea engine) not started.
+`../upstream-port/BANTO-PORT-PLAN.md`). Phase 3 (HTTP/openai engine) not started.
 
 ## Motivation
 Generalise **LLM/agent engines** the same way connectors were generalised
@@ -104,14 +104,14 @@ implementation, each with its own `baseUrl`/`apiKey`/`model`:
 ```yaml
 engines:
   default: bob
-  aidea:  { impl: "openai", baseUrl: "https://aidea-agent.dev.gw.link", apiKey: "…", model: "…" }
-  kannon: { impl: "openai", baseUrl: "https://kannon.dev.gw.link",      apiKey: "…", model: "…" }
+  openai-1:  { impl: "openai", baseUrl: "https://llm.example.internal", apiKey: "…", model: "…" }
+  openai-2: { impl: "openai", baseUrl: "https://llm.example.internal",      apiKey: "…", model: "…" }
 ```
 
 Resolution (`resolveEngine(name, block)`), in order:
 1. **built-in name** (bob/claude/codex/gemini) → lazy factory;
 2. **`impl:"openai"` in the block** → the shared `openai` plugin (`IMPL_PLUGINS`
-   in the registry). The engine's `name` is the config key (`aidea`/`kannon`);
+   in the registry). The engine's `name` is the config key (`openai-1`/`openai-2`);
 3. **external `module`** → dynamic import.
 
 `gateway/server.ts` enumerates the engine map from the built-ins **plus** any

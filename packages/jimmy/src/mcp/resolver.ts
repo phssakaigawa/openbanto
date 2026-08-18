@@ -145,7 +145,7 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
   }
 
   // Knowledge MCP server (built-in, scoped file IO under ~/.openbanto/knowledge/).
-  // Default ON — this is the OpenAI (AiDEA) engine's only path to persist
+  // Default ON — this is the OpenAI-compatible engine's only path to persist
   // per-user knowledge, since it has no native filesystem access.
   if (config.knowledge?.enabled !== false) {
     const knowledgeMcpPath = path.resolve(

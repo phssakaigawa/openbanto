@@ -130,7 +130,7 @@ guardrails:
         reason: "書き込み操作には承認が必要です"
     audit:
       sink: "log"                       # "log" | "http"
-      endpoint: ""                      # http: POST target (kannon等), auth headers optional
+      endpoint: ""                      # http: POST target (external audit service), auth headers optional
 ```
 
 **`beforeTurn` decision order** (fixed):

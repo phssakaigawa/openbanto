@@ -4,7 +4,7 @@
  *
  * A Model Context Protocol (MCP) server that gives AI engines scoped
  * file IO into the knowledge base at `~/.openbanto/knowledge/`. This is
- * the ONLY filesystem path the OpenAI (AiDEA) engine can reach — it has
+ * the ONLY filesystem path the OpenAI-compatible engine can reach — it has
  * no native Read/Write and consumes tools exclusively through the MCP
  * tool-call bridge. Claude may use these tools too, or its native FS
  * access — the recording instructions are written engine-agnostically.

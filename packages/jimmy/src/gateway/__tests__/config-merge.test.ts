@@ -49,19 +49,19 @@ describe("deepMerge (PUT /api/config)", () => {
 
 /**
  * GET /api/config must never leak a secret in the clear. Regression guard for
- * the admin-console leak: AiDEA engine apiKey + MCP Authorization headers were
+ * the admin-console leak: OpenAI-compatible engine apiKey + MCP Authorization headers were
  * being served verbatim while Slack tokens were already masked.
  */
 describe("maskConfigSecrets (GET /api/config)", () => {
   const config = {
     engines: {
-      default: "aidea",
+      default: "myllm",
       claude: { bin: "claude", model: "opus" },
-      aidea: {
+      myllm: {
         impl: "openai",
-        baseUrl: "https://aidea.example/v1",
-        model: "aidea-1",
-        apiKey: "sk-aidea-SUPERSECRET",
+        baseUrl: "https://llm.example/v1",
+        model: "llm-1",
+        apiKey: "sk-SUPERSECRET",
         headers: { "X-Org": "getworks", Authorization: "Bearer legacy-tok" },
       },
     },
@@ -73,7 +73,7 @@ describe("maskConfigSecrets (GET /api/config)", () => {
       custom: {
         netbox: {
           type: "sse",
-          url: "https://banto-netbox.dev.gw.link/mcp",
+          url: "https://banto-netbox.example.internal/mcp",
           headers: { Authorization: "Bearer netbox-mcp-KEY" },
         },
         localtool: {
@@ -89,13 +89,13 @@ describe("maskConfigSecrets (GET /api/config)", () => {
     const m = maskConfigSecrets(config) as typeof config;
 
     // engine secrets
-    expect(m.engines.aidea.apiKey).toBe("***");
-    expect(m.engines.aidea.headers.Authorization).toBe("***");
+    expect(m.engines.myllm.apiKey).toBe("***");
+    expect(m.engines.myllm.headers.Authorization).toBe("***");
     // non-secret header value inside a headers block is still masked (whole map is secret)
-    expect(m.engines.aidea.headers["X-Org"]).toBe("***");
+    expect(m.engines.myllm.headers["X-Org"]).toBe("***");
     // non-secret engine fields untouched
-    expect(m.engines.aidea.baseUrl).toBe("https://aidea.example/v1");
-    expect(m.engines.aidea.model).toBe("aidea-1");
+    expect(m.engines.myllm.baseUrl).toBe("https://llm.example/v1");
+    expect(m.engines.myllm.model).toBe("llm-1");
 
     // connector secrets (existing behavior preserved)
     expect(m.connectors.slack.botToken).toBe("***");
@@ -105,7 +105,7 @@ describe("maskConfigSecrets (GET /api/config)", () => {
     // mcp secrets
     expect(m.mcp.search.apiKey).toBe("***");
     expect(m.mcp.custom.netbox.headers.Authorization).toBe("***");
-    expect(m.mcp.custom.netbox.url).toBe("https://banto-netbox.dev.gw.link/mcp");
+    expect(m.mcp.custom.netbox.url).toBe("https://banto-netbox.example.internal/mcp");
     expect(m.mcp.custom.localtool.env.API_TOKEN).toBe("***");
     expect(m.mcp.custom.localtool.env.DEBUG).toBe("***");
     expect(m.mcp.custom.localtool.command).toBe("node");
@@ -113,7 +113,7 @@ describe("maskConfigSecrets (GET /api/config)", () => {
 
   it("does not mutate the source config", () => {
     maskConfigSecrets(config);
-    expect(config.engines.aidea.apiKey).toBe("sk-aidea-SUPERSECRET");
+    expect(config.engines.myllm.apiKey).toBe("sk-SUPERSECRET");
     expect(config.mcp.custom.netbox.headers.Authorization).toBe("Bearer netbox-mcp-KEY");
   });
 
@@ -124,8 +124,8 @@ describe("maskConfigSecrets (GET /api/config)", () => {
       masked,
     ) as typeof config;
 
-    expect(merged.engines.aidea.apiKey).toBe("sk-aidea-SUPERSECRET");
-    expect(merged.engines.aidea.headers.Authorization).toBe("Bearer legacy-tok");
+    expect(merged.engines.myllm.apiKey).toBe("sk-SUPERSECRET");
+    expect(merged.engines.myllm.headers.Authorization).toBe("Bearer legacy-tok");
     expect(merged.connectors.slack.botToken).toBe("xoxb-secret");
     expect(merged.mcp.search.apiKey).toBe("brave-KEY");
     expect(merged.mcp.custom.netbox.headers.Authorization).toBe("Bearer netbox-mcp-KEY");

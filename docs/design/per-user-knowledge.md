@@ -65,7 +65,7 @@ and computes `isNew = profileContent.length < 50`. So:
 The steady-state / onboarding instructions tell the engine to record to the
 speaker's own paths using **whatever file access it has**:
 
-- OpenAI (AiDEA/Kannon) engine → the built-in **knowledge MCP tools**
+- OpenAI-compatible engine → the built-in **knowledge MCP tools**
   (`write_knowledge` / `read_knowledge`, paths relative to the knowledge root,
   e.g. `users/<userKey>/profile.md`). It has no native filesystem access.
 - `claude` engine → native Read/Write to the absolute path, or the same MCP tools.

@@ -145,7 +145,7 @@ and symlinks whose real target escapes the root are rejected (`path.resolve`
 prefix check + `realpathSync` on the deepest existing ancestor). Error messages
 never echo the internal absolute path.
 
-**Why it exists**: the OpenAI (AiDEA/Kannon) engine has **no native filesystem
+**Why it exists**: the OpenAI-compatible engine has **no native filesystem
 access** — it can only touch files through MCP. This server is how it persists
 per-user knowledge (`users/<userKey>/profile.md`, `preferences.md`). The `claude`
 engine may use it too, or its native Read/Write — so the context's recording
@@ -157,7 +157,7 @@ engine-agnostically ("`write_knowledge` … or a direct file write"). See
 
 MCP tools are invoked by the **engine**, not the connector. Today the `claude`
 engine **and the built-in OpenAI-compatible `impl:"openai"` engines**
-(`AiDEA` / `Kannon`) consume MCP servers — both stdio and URL (SSE / streamable
+(OpenAI-compatible engines) consume MCP servers — both stdio and URL (SSE / streamable
 HTTP) transports. The OpenAI engine reads `opts.mcpConfigPath`, connects an MCP
 client per server via `@modelcontextprotocol/sdk`, advertises each server's tools
 to the model as OpenAI `tools` namespaced `"<server>__<tool>"`, and runs a bounded

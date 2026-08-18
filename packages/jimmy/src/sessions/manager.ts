@@ -256,7 +256,7 @@ export class SessionManager {
     // single Slack app dispatch to different 職人/engines: an explicit @employee
     // mention, or an image attachment → the configured vision employee
     // (sessions.imageEmployee, e.g. a claude-backed 名刺係). Plain text with no
-    // match stays on the default engine (AiDEA). No-op when org/ is empty.
+    // match stays on the default engine. No-op when org/ is empty.
     if (!session && !opts.employee) {
       const routed = this.resolveMessageEmployee(msg);
       if (routed) {
@@ -521,7 +521,7 @@ export class SessionManager {
       // OpenAI-compatible engine (via its MCP tool-call bridge). Resolve + write
       // the per-turn MCP config for EVERY engine; engines that don't read the
       // path (bob/codex/gemini) simply ignore it. (Previously gated to
-      // `engine === "claude"`, which starved the AiDEA/openai engine of tools.)
+      // `engine === "claude"`, which starved the OpenAI-compatible engine of tools.)
       {
         const mcpConfig = resolveMcpServers(this.config.mcp, employee, {
           connector: connector.name,
@@ -590,10 +590,10 @@ export class SessionManager {
       }
 
       // Vision-職人 hand-off: expose image attachments at a gateway URL that a
-      // non-local vision/OCR 職人 (e.g. Qwen3-VL on dev6) can fetch — the Slack
+      // non-local vision/OCR 職人 (e.g. an external vision/OCR service) can fetch — the Slack
       // url_private is behind the bot token it can't pass. Register each image
       // into /api/files and inject the reachable URL so a non-VLM engine
-      // (AiDEA/DeepSeek) can hand it to a describe_image tool. Gated on
+      // (an OpenAI-compatible LLM) can hand it to a describe_image tool. Gated on
       // gateway.publicFileBaseUrl; skipped for claude (reads the local file
       // directly, and has no describe_image tool).
       const fileBaseUrl = this.config.gateway?.publicFileBaseUrl?.replace(/\/+$/, "");

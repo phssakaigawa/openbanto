@@ -140,7 +140,7 @@ export function buildRegistry(config: JinnConfig): ModelRegistry {
       ? fromEngineModelsConfig(name, engineBlock)
       : synthesized[name]; // engine omitted from the block → keep the synthesized entry
   }
-  // Impl-selected engines (impl:"openai" — aidea/kannon/…) are always synthesized
+  // Impl-selected engines (impl:"openai" — openai-1/openai-2/…) are always synthesized
   // from engines.<name>.model; they aren't in the built-in ENGINE_NAMES list.
   addImplEngineEntries(registry, config);
   return registry;

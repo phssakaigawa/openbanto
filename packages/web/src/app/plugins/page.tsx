@@ -452,7 +452,7 @@ function OpenAiEngineForm({
               className={inputCls}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="aidea"
+              placeholder="openai-1"
               disabled={isEdit}
               required
             />
@@ -465,7 +465,7 @@ function OpenAiEngineForm({
               className={inputCls}
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://aidea-agent.dev.gw.link"
+              placeholder="https://llm.example.internal"
               required
             />
           </div>
@@ -755,7 +755,7 @@ function GuardrailSection({
                     className={inputCls}
                     value={auditEndpoint}
                     onChange={(e) => setAuditEndpoint(e.target.value)}
-                    placeholder="https://kannon.dev.gw.link/audit"
+                    placeholder="https://llm.example.internal/audit"
                   />
                 </div>
               )}
@@ -1090,8 +1090,8 @@ function McpSection({
         style={{ background: "color-mix(in srgb, var(--accent) 8%, transparent)" }}
       >
         MCP ツールを呼ぶのは<strong>エンジン</strong>です。現状 <code>claude</code> エンジンが
-        stdio / HTTP(SSE) MCP を消費します。<code>bob</code> は非対応、<code>AiDEA</code> /{" "}
-        <code>Kannon</code>（openai 互換）は tool-call 実装後に対応します。
+        stdio / HTTP(SSE) MCP を消費します。<code>bob</code> は非対応、{" "}
+        <code>impl: &quot;openai&quot;</code> 系（OpenAI 互換）エンジンは tool-call 実装後に対応します。
       </div>
 
       {msg && (

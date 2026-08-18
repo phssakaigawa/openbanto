@@ -172,7 +172,7 @@ export async function startGateway(
 
   // Resolve the set of engine names to build: every built-in, plus any config
   // engine block that carries a `module` specifier OR an `impl` (e.g. named
-  // openai instances aidea/kannon that share the in-tree openai implementation).
+  // openai instances openai-1/openai-2 that share the in-tree openai implementation).
   const engineNames = new Set<string>(BUILTIN_ENGINE_NAMES);
   for (const [name, block] of Object.entries(config.engines ?? {})) {
     if (name === "default") continue;

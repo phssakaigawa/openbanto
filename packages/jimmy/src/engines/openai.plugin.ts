@@ -3,7 +3,7 @@
 // This is the plugin the registry resolves for ANY config engine block that
 // carries `impl: "openai"` — the third resolution path alongside built-in names
 // (bob/claude/codex/gemini) and external `module` specifiers. One plugin, many
-// named instances: `engines.aidea` and `engines.kannon` both resolve here and
+// named instances: `engines.openai-1` and `engines.openai-2` both resolve here and
 // each get their own OpenAiEngine built from their own baseUrl/apiKey/model.
 //
 // MCP tool-calls: the underlying OpenAiEngine now honours opts.mcpConfigPath —

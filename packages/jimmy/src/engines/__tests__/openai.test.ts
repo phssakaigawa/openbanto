@@ -77,7 +77,7 @@ describe("OpenAiEngine.run", () => {
       vi.fn(async () => new Response(body, { status: 200 })),
     );
 
-    const engine = new OpenAiEngine({ baseUrl: "https://x/", apiKey: "secret", model: "m", name: "aidea" });
+    const engine = new OpenAiEngine({ baseUrl: "https://x/", apiKey: "secret", model: "m", name: "openai-1" });
     const deltas: StreamDelta[] = [];
     const result = await engine.run({
       prompt: "hi",

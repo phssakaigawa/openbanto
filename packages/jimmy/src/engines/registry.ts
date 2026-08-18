@@ -92,9 +92,9 @@ const BUILTINS: Record<string, () => Promise<EnginePlugin>> = {
 
 // ---- `impl`-selected plugins ------------------------------------------------
 // A config engine block may name a shared IMPLEMENTATION rather than being a
-// built-in name or an external module: `engines.aidea = { impl: "openai", … }`.
+// built-in name or an external module: `engines.openai-1 = { impl: "openai", … }`.
 // This is the third resolution path (see resolveEngine). It lets an operator
-// declare MANY named engines (aidea, kannon, …) that all share one in-tree
+// declare MANY named engines (openai-1, openai-2, …) that all share one in-tree
 // implementation, each with its own baseUrl/apiKey/model. The lazy factories
 // mirror BUILTINS; their capability tables live in IMPL_CAPABILITIES.
 
@@ -244,7 +244,7 @@ export function defineEnginePlugin(plugin: EnginePlugin): EnginePlugin {
 export function engineCapabilities(name: string, config?: JinnConfig): EngineCapabilities | undefined {
   const builtin = CAPABILITIES[name];
   if (builtin) return builtin;
-  // impl-selected engine (e.g. an aidea/kannon block with impl:"openai"): look
+  // impl-selected engine (e.g. an openai-1/openai-2 block with impl:"openai"): look
   // up the block in config and return the impl's capability table.
   if (config) {
     const block = (config.engines as unknown as Record<string, unknown>)?.[name];

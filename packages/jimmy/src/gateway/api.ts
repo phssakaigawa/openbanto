@@ -1735,7 +1735,7 @@ Handle this as a priority request from a colleague.`;
     if (method === "GET" && pathname === "/api/config") {
       const config = context.getConfig();
       // Mask EVERY secret before it leaves the gateway — connector tokens,
-      // engine apiKey (AiDEA/OpenAI), MCP auth headers (Authorization) and
+      // engine apiKey (OpenAI-compatible), MCP auth headers (Authorization) and
       // stdio-MCP env blocks. See maskConfigSecrets(); masked values round-trip
       // safely through PUT /api/config (deepMerge ignores "***").
       const sanitized = maskConfigSecrets(config);

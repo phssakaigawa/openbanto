@@ -257,7 +257,7 @@ async function handleJsonUpload(req: HttpRequest, res: ServerResponse, context: 
  * Register an already-local file into managed storage so it is retrievable at
  * `GET /api/files/:id`. Returns the file metadata (incl. the id). Used to expose
  * a downloaded chat attachment at a stable URL so an external vision/OCR 職人
- * (e.g. Qwen3-VL on dev6) can fetch it — the maintainer's tool takes a URL, and
+ * (e.g. an external vision/OCR service) can fetch it — the maintainer's tool takes a URL, and
  * the Slack `url_private` is behind a bot-token wall it can't pass. Best-effort
  * caller decides the public base URL (gateway.publicFileBaseUrl).
  */

@@ -504,7 +504,7 @@ export async function installPlugin(
 // ---- OpenAI-compatible engine (built-in impl, no pnpm add) -----------------
 
 export interface OpenAiEngineRequest {
-  /** Config engine key (aidea/kannon/…). [a-z0-9-]+ */
+  /** Config engine key (openai-1/openai-2/…). [a-z0-9-]+ */
   name: string;
   baseUrl: string;
   /** Omit / empty on an EDIT to keep the stored key unchanged. Required on create. */

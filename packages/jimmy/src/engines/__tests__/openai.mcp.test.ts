@@ -137,7 +137,7 @@ describe("OpenAiEngine + MCP tool-calls", () => {
       baseUrl: "https://x",
       apiKey: "secret-key",
       model: "m",
-      name: "aidea",
+      name: "openai-1",
       bridgeDeps: fakeDeps(client),
     });
 
