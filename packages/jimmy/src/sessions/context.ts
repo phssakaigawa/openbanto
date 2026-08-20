@@ -956,6 +956,7 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig, scope?: 
     lines.push(`- \`${prefsRel}\` (\`${prefsPath}\`) — their style/communication preferences`);
     lines.push(`- \`shared/projects.md\` — project details relevant to the whole team`);
     lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), record it with \`write_knowledge\` (or, only if your engine has native file access, in \`~/.openbanto/CLAUDE.md\`)`);
+    lines.push(`- **Reusable skills (no operator needed)**: when you distil a repeatable procedure/runbook worth keeping, save its full \`SKILL.md\` markdown with \`write_knowledge\` at \`shared/skills-inbox/<name>.md\` — it is auto-promoted into an installed skill (no human copy step). Start it with a \`## Trigger\` line describing when to invoke it. To update a skill, just re-write the same inbox path.`);
     lines.push(`\nRead the same paths with \`read_knowledge\` (or a native read) to recall what you already know about this speaker. Do this silently — don't announce every file update. Just evolve.`);
     if (canvasHintApplies) {
       lines.push(
