@@ -126,12 +126,20 @@ describe("runJobMonitor", () => {
 
     expect(final?.timedOut).toBe(true);
     // The backgrounded sleeps shared the job's process group — none survive.
+    // Anchor the pattern to the whole command line (`^…$`): an unanchored
+    // `pgrep -f "sleep 61.234"` also matches the `/bin/sh -c pgrep …` wrapper
+    // execSync spawns — its own arg list contains the marker — so it would
+    // report a phantom survivor (its parent shell) even after the real sleeps
+    // die. Poll briefly too, since the group-kill signal is async.
     const { execSync } = await import("node:child_process");
-    let survivors = "";
-    try {
-      survivors = execSync(`pgrep -f "${marker}" || true`, { encoding: "utf8" }).trim();
-    } catch {
-      survivors = "";
+    let survivors = "x";
+    for (let i = 0; i < 40 && survivors !== ""; i++) {
+      try {
+        survivors = execSync(`pgrep -f "^${marker}$" || true`, { encoding: "utf8" }).trim();
+      } catch {
+        survivors = "";
+      }
+      if (survivors !== "") await new Promise((r) => setTimeout(r, 50));
     }
     expect(survivors).toBe("");
   }, 20_000);
