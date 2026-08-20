@@ -164,4 +164,23 @@ describe("tables", () => {
     expect(out).not.toContain("**");
     expect(out).not.toContain("|---|");
   });
+
+  describe("emphasis around URLs (Slack auto-link)", () => {
+    it("unwraps a bold-wrapped URL so Slack can linkify it", () => {
+      const out = markdownToSlackMrkdwn("開いてください：**https://notes.example/banto/authorize?state=abc**（5分）");
+      expect(out).toContain("https://notes.example/banto/authorize?state=abc");
+      expect(out).not.toContain("*https://");
+      expect(out).not.toContain("state=abc*");
+    });
+
+    it("unwraps single-asterisk and underscore emphasis on URLs", () => {
+      expect(markdownToSlackMrkdwn("*https://x.com/a?b=1*")).toBe("https://x.com/a?b=1");
+      expect(markdownToSlackMrkdwn("_https://y.com_")).toBe("https://y.com");
+    });
+
+    it("leaves explicit <url|text> links and non-URL emphasis intact", () => {
+      expect(markdownToSlackMrkdwn("[ラベル](https://z.com)")).toBe("<https://z.com|ラベル>");
+      expect(markdownToSlackMrkdwn("普通の **太字** テキスト")).toBe("普通の *太字* テキスト");
+    });
+  });
 });

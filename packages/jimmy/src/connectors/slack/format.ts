@@ -105,6 +105,12 @@ export function markdownToSlackMrkdwn(text: string): string {
           .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>")
           // Bullet lists: - item or * item → • item (with optional indentation)
           .replace(/^(\s*)[-*]\s+/gm, "$1• ")
+          // A bare URL wrapped in emphasis (`*url*` / `_url_`, incl. from `**url**`
+          // above) breaks Slack auto-linking — the `*` glued to the URL stops it
+          // from linkifying (a common LLM habit is to bold the link it hands out).
+          // Unwrap emphasis that directly hugs a URL so it becomes a live link.
+          // Explicit `<url|text>` links are untouched (the char class excludes <>|).
+          .replace(/[*_]+(https?:\/\/[^\s*_<>|]+)[*_]+/g, "$1")
       );
     })
     .join("");
