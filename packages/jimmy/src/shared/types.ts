@@ -336,7 +336,7 @@ export interface McpGlobalConfig {
   /**
    * Built-in scoped knowledge server: read/write/list files under
    * `~/.openbanto/knowledge/`. Enabled by default (omit or `enabled: true`);
-   * set `enabled: false` to opt out. This is how the OpenAI (AiDEA) engine —
+   * set `enabled: false` to opt out. This is how the OpenAI-compatible engine —
    * which has no native filesystem access — records per-user knowledge.
    */
   knowledge?: {
@@ -590,7 +590,18 @@ export interface EngineConfigBlock {
 
 export interface JinnConfig {
   jinn?: { version?: string };
-  gateway: { port: number; host: string; streaming?: boolean };
+  gateway: {
+    port: number;
+    host: string;
+    streaming?: boolean;
+    /** Base URL at which this gateway's `GET /api/files/:id` is reachable by an
+     *  EXTERNAL vision/OCR 職人 (e.g. an external vision/OCR service). When set, image
+     *  attachments are registered into /api/files and their URL is injected into
+     *  the prompt so a non-local engine (an OpenAI-compatible LLM) can hand it to a
+     *  describe_image tool. Unset → no-op (local-fs engines like claude read the
+     *  file directly). Example: "http://gateway.internal:7777". */
+    publicFileBaseUrl?: string;
+  };
   engines: {
     /** Default engine for new sessions. Known built-ins are offered for
      *  completion; any string is accepted so an external engine plugin
@@ -652,6 +663,27 @@ export interface JinnConfig {
      *  same engine session with a continuation prompt. Default: [30s, 120s, 300s].
      *  Set to [] to disable. */
     transientRetryDelaysMs?: number[];
+    /** How many times to resend the SAME prompt when a turn comes back with no
+     *  usable response — no result text and no error (the "(No response from
+     *  engine)" case), or a non-interrupt timeout. Resumes the same engine
+     *  session each time. Default: 2 (up to 3 total attempts). Set 0 to disable. */
+    emptyResponseRetries?: number;
+    /** Delay (ms) to wait before each empty/timeout resend. Gives a momentarily
+     *  wedged engine a beat to recover and avoids a tight resend loop. Kept short
+     *  (unlike transientRetryDelaysMs). Default: 1500. Set 0 for no delay. */
+    emptyResponseRetryDelayMs?: number;
+    /** Name of the 職人 (org employee) that image-bearing messages auto-route to
+     *  when the connector didn't bind an employee and no `@employee` is mentioned.
+     *  Lets a single Slack app send photos to a vision-capable (e.g. claude-backed)
+     *  worker while plain text stays on the default engine. Unset → no auto-routing. */
+    imageEmployee?: string;
+    /** Opt-in: also retry the interactive engine's hard-turn timeout
+     *  ("Interrupted: interactive turn timed out"). OFF by default because that
+     *  turn genuinely occupied the engine (up to interactiveTurnTimeoutMs) — a
+     *  verbatim resend risks duplicating tool side effects and another long wait.
+     *  When enabled, the retry uses a CONTINUATION prompt (not a verbatim resend)
+     *  so completed work is not repeated. Default: false. */
+    retryInteractiveTimeout?: boolean;
     /** Deliver late/background engine output (a Stop hook that fires after the
      *  turn already settled — e.g. a background sub-agent finishing) back to the
      *  session's conversation. Default: true. */

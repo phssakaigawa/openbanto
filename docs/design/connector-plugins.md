@@ -106,6 +106,44 @@ Plugins run **in-process with the daemon's privileges** (a connector plugin can 
 anything the daemon can). This matches the single-tenant / trusted-boundary model
 (see README security section). Only install connector plugins you trust.
 
+### 8. Reliability checkpoints (engine responses)
+A connector **bridges** a chat surface to the engine — it never calls the engine
+itself. So the retry for a missing engine response lives in the **core**
+(`SessionManager`), not in any connector, and applies uniformly to every
+connector (Slack, Discord, LINE WORKS, …):
+
+- **Empty / timeout retry (core-owned).** When a turn returns nothing usable —
+  no result text *and* no error (the `(No response from engine)` case), or a
+  non-interrupt timeout — the core resends the **same** prompt on the **same**
+  engine session up to `sessions.emptyResponseRetries` times (default 2 → 3
+  total attempts), waiting `sessions.emptyResponseRetryDelayMs` (default 1500ms)
+  before each resend, then delivers. This composes with, and runs before, the
+  existing dead-session / poisoned-transcript / transient-5xx / rate-limit
+  recovery paths, which each own their distinct error signatures. The
+  interactive engine's hard-turn timeout is excluded by default (it's a
+  deliberate long-occupancy stop); `sessions.retryInteractiveTimeout` opts it in
+  and then retries with a **continuation** prompt, not a verbatim resend, so
+  completed work isn't repeated. All four knobs are editable from the Settings
+  UI (セッション → 信頼性・リトライ) as well as `~/.openbanto/config.yaml`.
+
+Checklist for a connector author — do **not** re-implement engine retry; instead
+make the connector's own I/O reliable so the core's retries actually reach users:
+
+- [ ] **No duplicate engine retry.** Deliver whatever text the core hands you
+      exactly once. A connector cannot re-invoke the engine and must not try —
+      re-sending the inbound message would double-charge and duplicate tool
+      side effects.
+- [ ] **Idempotent delivery.** `sendMessage` / `replyMessage` should not post the
+      same reply twice if called again after a transient outbound failure.
+- [ ] **Resilient outbound.** Wrap provider send/reply/reaction calls so a
+      provider hiccup is retried or logged, never thrown into the router.
+- [ ] **Graceful empty result.** If the core still delivers an error/empty
+      sentinel after its retries, render it as a normal message — don't crash
+      the connector loop.
+- [ ] **Surface missing scopes.** When a provider call fails for a permission
+      reason (e.g. Slack `missing_scope` on `reactions:write`), log an
+      actionable hint (which scope, how to re-grant) rather than a bare error.
+
 ## Phasing
 1. **Registry + wiring dedup + lazy built-in deps** (no behaviour change): add the
    registry and one wiring helper; move each built-in connector to a `plugin.ts`

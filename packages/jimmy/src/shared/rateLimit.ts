@@ -89,6 +89,45 @@ export function isTransientServerError(result: EngineResult): boolean {
   return TRANSIENT_SERVER_ERROR_RE.test(result.error);
 }
 
+const TIMEOUT_ERROR_RE = /tim(?:ed|e)\s*-?\s*out|timeout/i;
+
+/**
+ * True when an engine turn produced nothing usable to deliver: no result text
+ * AND no error (the "(No response from engine)" case), or a non-interrupt
+ * timeout error with no partial result. Callers should resend the SAME prompt
+ * on the SAME engine session a bounded number of times before giving up.
+ *
+ * Deliberately excludes:
+ *  - results that already carry text (deliver them),
+ *  - interrupted turns (a user/hard stop — incl. the interactive engine's
+ *    hard-turn timeout which is force-settled as "Interrupted: …"),
+ *  - rate-limit / dead-session / poisoned / transient errors, which all carry
+ *    their own error text and are handled by their specialized paths above.
+ */
+export function isEmptyOrTimeoutResult(result: EngineResult): boolean {
+  if (result.result?.trim()) return false;
+  const err = result.error?.trim();
+  if (!err) return true; // truly empty — the "(No response from engine)" case
+  if (err.startsWith("Interrupted")) return false; // deliberate stop
+  if (result.rateLimit?.status) return false; // rate limit → its own path
+  return TIMEOUT_ERROR_RE.test(err);
+}
+
+const INTERACTIVE_TURN_TIMEOUT_RE = /Interrupted:\s*interactive turn timed out/i;
+
+/**
+ * The interactive (PTY) engine's hard-turn timeout, force-settled as
+ * "Interrupted: interactive turn timed out". Modeled as an interrupt (a
+ * deliberate stop), so isEmptyOrTimeoutResult() excludes it. Retried only when
+ * `sessions.retryInteractiveTimeout` is opted in — and then with a continuation
+ * prompt, never a verbatim resend, to avoid repeating completed work.
+ */
+export function isInteractiveTurnTimeout(result: EngineResult): boolean {
+  if (!result.error) return false;
+  if (result.result?.trim()) return false;
+  return INTERACTIVE_TURN_TIMEOUT_RE.test(result.error);
+}
+
 export function detectRateLimit(result: EngineResult): RateLimitDetection {
   const resetsAt = typeof result.rateLimit?.resetsAt === "number"
     ? result.rateLimit.resetsAt

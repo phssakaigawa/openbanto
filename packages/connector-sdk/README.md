@@ -86,6 +86,38 @@ server. **Verify the provider's signature inside your handler** — the host doe
 not do it for you. The webhook endpoint must be exposed over TLS and reachable
 by the provider (separate from the no-auth dashboard).
 
+## Reliability checkpoints
+
+A connector **bridges** a chat surface to the engine — it never calls the engine
+itself. The recovery for a missing engine reply lives in the OpenBanto **core**,
+not in your plugin, and applies to every connector uniformly:
+
+- **Empty / timeout retry is core-owned.** When a turn returns nothing usable —
+  no result text *and* no error (the `(No response from engine)` case), or a
+  non-interrupt timeout — the core resends the **same** prompt on the **same**
+  engine session up to `sessions.emptyResponseRetries` times (default `2`,
+  `sessions.emptyResponseRetryDelayMs` between attempts) before handing you text
+  to deliver. **Do not re-implement this**; a connector cannot re-invoke the
+  engine, and re-sending the inbound message would double-charge and duplicate
+  tool side effects. (These knobs, plus `retryInteractiveTimeout`, are editable
+  from the Settings UI.)
+
+When authoring a connector, make your **own** I/O reliable so those retries reach
+users:
+
+- [ ] **Deliver once.** Post the core's text exactly once; make `sendMessage` /
+      `replyMessage` idempotent under an outbound retry.
+- [ ] **Resilient outbound.** Wrap provider send/reply/reaction calls so a
+      provider hiccup is retried or logged — never thrown into the router.
+- [ ] **Graceful empty result.** If the core still delivers an error/empty
+      sentinel after its retries, render it as a normal message; don't crash the
+      loop.
+- [ ] **Surface missing scopes.** On a permission failure (e.g. Slack
+      `missing_scope` for `reactions:write`), log which scope is missing and how
+      to re-grant it, not a bare error.
+
+See `docs/design/connector-plugins.md` §8 for the full rationale.
+
 ## Security
 
 Plugins run **in-process with the daemon's privileges**. Only install connector

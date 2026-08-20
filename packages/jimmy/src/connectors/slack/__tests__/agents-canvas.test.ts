@@ -65,7 +65,7 @@ afterEach(() => {
 describe("renderCanvasMarkdown", () => {
   it("renders a placeholder when there are no sessions", () => {
     const md = renderCanvasMarkdown([], { nowMs: FIXED_NOW });
-    expect(md).toContain("# Ryoko Agents View");
+    expect(md).toContain("# Banto Agents View");
     expect(md).toContain("0 sessions");
     expect(md).toContain("No active sessions");
   });

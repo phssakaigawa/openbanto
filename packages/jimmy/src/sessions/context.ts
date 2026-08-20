@@ -146,6 +146,17 @@ export function buildContext(opts: {
     speakerIsOperator,
   };
 
+  // Whether the engine for THIS turn has native shell/filesystem access. CLI
+  // engines (claude/codex/gemini/bob) do; the OpenAI-compatible HTTP engine
+  // (impl:"openai") does NOT — it acts only through MCP tools. The prompt must
+  // not promise filesystem/bash to an engine that can't back it, or the model
+  // role-plays reading/editing files and running commands it cannot actually do.
+  const engineName = opts.employee?.engine ?? opts.config?.engines?.default;
+  const engineBlock = engineName
+    ? (opts.config?.engines as Record<string, unknown> | undefined)?.[engineName]
+    : undefined;
+  const hasNativeFs = (engineBlock as { impl?: string } | undefined)?.impl !== "openai";
+
   // ── ESSENTIAL: Identity ─────────────────────────────────────
   if (opts.employee) {
     sections.push({
@@ -157,6 +168,7 @@ export function buildContext(opts: {
         language,
         opts.hierarchy?.nodes[opts.employee.name],
         opts.hierarchy,
+        hasNativeFs,
       ),
       summary: `# You are ${opts.employee.displayName}\nEmployee: ${opts.employee.name}, ${opts.employee.department}, ${opts.employee.rank}`,
     });
@@ -164,7 +176,7 @@ export function buildContext(opts: {
     sections.push({
       tier: Tier.ESSENTIAL,
       marker: "# You are",
-      content: buildIdentity(portalName, operatorName, language, opts.speakerName, speakerIsOperator),
+      content: buildIdentity(portalName, operatorName, language, opts.speakerName, speakerIsOperator, hasNativeFs),
       summary: `# You are ${portalName}\nYour working directory is \`~/.openbanto\` (${JINN_HOME}).`,
     });
   }
@@ -283,7 +295,9 @@ export function buildContext(opts: {
   }
 
   // ── OPTIONAL: Local environment ─────────────────────────────
-  const envCtx = buildEnvironmentContext();
+  // Only for engines that can actually explore the local filesystem. A remote
+  // OpenAI-compatible engine can't, so this whole section would be misleading.
+  const envCtx = hasNativeFs ? buildEnvironmentContext() : null;
   if (envCtx) {
     sections.push({
       tier: Tier.OPTIONAL,
@@ -325,6 +339,7 @@ function buildEmployeeIdentity(
   language: string,
   node?: import("../shared/types.js").OrgNode,
   hierarchy?: import("../shared/types.js").OrgHierarchy,
+  hasNativeFs = true,
 ): string {
   const languageInstruction = language !== "English"
     ? `\n**Language**: Always respond in ${language}. All your communication with the user must be in ${language}.\n`
@@ -348,7 +363,8 @@ ${languageInstruction}
 - **Model**: ${employee.model}
 ${chainOfCommand}
 ## System context
-You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`~/.openbanto\` (${JINN_HOME}).
+${hasNativeFs
+  ? `You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You have access to the filesystem, can run commands, call APIs, and send messages via connectors. Your working directory is \`~/.openbanto\` (${JINN_HOME}).
 
 You can:
 - Read and write files in the home directory
@@ -356,7 +372,15 @@ You can:
 - Call the gateway API to interact with other parts of the system
 - Send messages via connectors (Slack, etc.)
 - Access skills, knowledge base, and documentation
-- Collaborate with other employees by mentioning them or creating sessions
+- Collaborate with other employees by mentioning them or creating sessions`
+  : `You are part of the ${portalName} AI gateway — a system that orchestrates AI workers. You act through your configured **tools** (MCP servers), not a local shell. You do NOT have a local filesystem or the ability to run shell commands — never claim to read/edit files or run bash, and don't narrate doing so.
+
+You can:
+- Call your configured MCP tools (the only way you touch external systems)
+- Record what you learn with the \`write_knowledge\` knowledge tool
+- Send messages via connectors (Slack, etc.)
+- Collaborate with other employees by mentioning them
+- If a task needs a capability you don't have, say so plainly and delegate or ask the operator — never pretend`}
 
 Be proactive, take initiative, and deliver results. You're not a chatbot — you're a worker.`;
 }
@@ -442,6 +466,7 @@ function buildIdentity(
   language?: string,
   speakerName?: string,
   speakerIsOperator = false,
+  hasNativeFs = true,
 ): string {
   const operatorLine = operatorName
     ? speakerIsOperator || !speakerName
@@ -463,11 +488,13 @@ ${portalName} — whose name means *banto* (番頭), the head clerk of a traditi
 - **Delegate the heavy lifting**: You run the front desk. Hand deep research, multi-step jobs, and real execution to your engine, then bring back and report the result — don't try to do everything inline yourself.
 - **Be proactive**: Don't just answer questions — suggest next steps, flag issues, offer to do related tasks.
 - **Be concise**: Respect the user's time. Lead with the answer, not the reasoning.
-- **Be capable**: You have access to the filesystem, can run commands, call APIs, send messages via connectors, and manage the system.
+- **Be capable**: ${hasNativeFs
+  ? "You have access to the filesystem, can run commands, call APIs, send messages via connectors, and manage the system."
+  : "You act through your configured **tools** (MCP servers), call APIs, and send messages via connectors. You have NO local shell or filesystem — never claim to read/edit files or run bash. If something needs a capability you don't have, say so and delegate or ask the operator; don't pretend."}
 - **Be honest**: If you don't know something or can't do something, say so clearly.
 - **Remember context**: You're part of a persistent system. Sessions can be resumed. Build on previous work.
-${languageInstruction}
-## Your home directory
+${languageInstruction}${hasNativeFs
+  ? `## Your home directory
 Your working directory is \`~/.openbanto\` (${JINN_HOME}). This contains:
 - \`config.yaml\` — your configuration (engines, connectors, logging)
 - \`org/\` — employee definitions (YAML files defining AI workers)
@@ -480,7 +507,9 @@ Your working directory is \`~/.openbanto\` (${JINN_HOME}). This contains:
 - \`CLAUDE.md\` — user-defined instructions (always follow these)
 - \`AGENTS.md\` — agent/employee documentation
 
-You can read, write, and modify any of these files to configure yourself, create new employees, add skills, etc.`;
+You can read, write, and modify any of these files to configure yourself, create new employees, add skills, etc.`
+  : `## How you persist things
+You have no local filesystem, so you cannot open or edit the gateway's config directly. To remember something about a person or project, use the \`write_knowledge\` knowledge tool. To change configuration or run real work, use a configured tool, delegate to a native-filesystem employee, or ask the operator. Do not claim to have read or edited \`config.yaml\` / \`CLAUDE.md\` — you can't.`}`;
 }
 
 function buildSessionContext(opts: {
@@ -926,7 +955,8 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig, scope?: 
     lines.push(`- \`${profileRel}\` (\`${profilePath}\`) — this person's business/identity info`);
     lines.push(`- \`${prefsRel}\` (\`${prefsPath}\`) — their style/communication preferences`);
     lines.push(`- \`shared/projects.md\` — project details relevant to the whole team`);
-    lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), update \`~/.openbanto/CLAUDE.md\``);
+    lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), record it with \`write_knowledge\` (or, only if your engine has native file access, in \`~/.openbanto/CLAUDE.md\`)`);
+    lines.push(`- **Reusable skills (no operator needed)**: when you distil a repeatable procedure/runbook worth keeping, save its full \`SKILL.md\` markdown with \`write_knowledge\` at \`shared/skills-inbox/<name>.md\` — it is auto-promoted into an installed skill (no human copy step). Start it with a \`## Trigger\` line describing when to invoke it. To update a skill, just re-write the same inbox path.`);
     lines.push(`\nRead the same paths with \`read_knowledge\` (or a native read) to recall what you already know about this speaker. Do this silently — don't announce every file update. Just evolve.`);
     if (canvasHintApplies) {
       lines.push(

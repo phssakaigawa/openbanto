@@ -160,7 +160,7 @@ export default defineGuardrailPlugin({
         };
 
         if (audit.sink === "http" && audit.endpoint) {
-          // Best-effort POST to an external audit gateway (kannon etc.). Any
+          // Best-effort POST to an external audit service. Any
           // failure is swallowed — a flaky audit sink must never break a turn.
           // The endpoint/headers are NOT logged.
           try {

@@ -43,6 +43,14 @@ describe("TelegramConnector", () => {
     });
   });
 
+  // The bot client is created lazily in start() (node-telegram-bot-api is an
+  // optional peer dep imported there). Message-sending tests need a live
+  // `this.bot`, so start it — against the mock — in their own beforeEach.
+  const startBot = async () => {
+    await connector.start();
+    vi.clearAllMocks();
+  };
+
   describe("constructor", () => {
     it("sets the connector name to telegram", () => {
       expect(connector.name).toBe("telegram");
@@ -225,6 +233,7 @@ describe("TelegramConnector", () => {
   });
 
   describe("sendMessage", () => {
+    beforeEach(startBot);
     it("sends a message to the target chat", async () => {
       const target: Target = { channel: "12345" };
       await connector.sendMessage(target, "Hello!");
@@ -261,6 +270,7 @@ describe("TelegramConnector", () => {
   });
 
   describe("replyMessage", () => {
+    beforeEach(startBot);
     it("sends a reply to a specific message", async () => {
       const target: Target = {
         channel: "12345",
@@ -275,6 +285,7 @@ describe("TelegramConnector", () => {
   });
 
   describe("editMessage", () => {
+    beforeEach(startBot);
     it("edits an existing message", async () => {
       const target: Target = {
         channel: "12345",

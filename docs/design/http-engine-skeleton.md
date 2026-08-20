@@ -4,7 +4,7 @@
 > now ships in-tree — `packages/jimmy/src/engines/openai.ts` +
 > `openai.plugin.ts`, resolved for any config block with `impl: "openai"` (no
 > `pnpm add`, no external package). Multiple named instances share it
-> (`engines.aidea`, `engines.kannon`, …), each with its own baseUrl/apiKey/model,
+> (`engines.openai-1`, `engines.openai-2`, …), each with its own baseUrl/apiKey/model,
 > and a Web form on the Plugins page (engine tab) creates/edits them. See
 > `engine-plugins.md` → "Built-in `impl:"openai"` engine". This document remains
 > the reference for building an HTTP engine as an **external SDK package** when you

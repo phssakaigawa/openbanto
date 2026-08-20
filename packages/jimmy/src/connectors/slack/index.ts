@@ -30,6 +30,19 @@ import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
 
+/**
+ * Format a reactions.add failure for logging. When Slack reports `missing_scope`
+ * the fix is operational (the installed app lacks `reactions:write`), so spell
+ * that out instead of leaving a bare `missing_scope` in the logs.
+ */
+function reactionErrorHint(err: unknown): string {
+  const msg = String((err as { data?: { error?: string } })?.data?.error ?? err);
+  if (msg.includes("missing_scope")) {
+    return `${msg} — Slack app に reactions:write が付与されていません。Settings の Slack App Manifest を貼り直してアプリを再インストールしてください。`;
+  }
+  return msg;
+}
+
 export interface SlackConnectorContext {
   /** Display name of the Jinn instance (used as botName in triage) */
   portalName?: string;
@@ -434,15 +447,31 @@ export class SlackConnector implements Connector {
       if ((event as any).files) {
         for (const file of (event as any).files) {
           try {
+            // Slack's newer file-access model can deliver a STUB file object in
+            // the live event with no `url_private` (e.g. file_access !== "visible"
+            // at delivery time). Fetch the full object via files.info (needs the
+            // files:read scope) before downloading, so image attachments actually
+            // reach the engine instead of failing with "parse URL from undefined".
+            let urlPrivate: string | undefined = file.url_private;
+            let mimeType: string | undefined = file.mimetype;
+            if (!urlPrivate && file.id) {
+              const info = await this.app.client.files.info({ file: file.id });
+              urlPrivate = (info.file as any)?.url_private;
+              mimeType = mimeType || (info.file as any)?.mimetype;
+            }
+            if (!urlPrivate) {
+              logger.warn(`[slack] attachment ${file.id ?? file.name} has no url_private (file_access=${file.file_access}); skipping`);
+              continue;
+            }
             const localPath = await downloadAttachment(
-              file.url_private,
+              urlPrivate,
               this.app.client.token!,
               TMP_DIR,
             );
             attachments.push({
               name: file.name,
-              url: file.url_private,
-              mimeType: file.mimetype,
+              url: urlPrivate,
+              mimeType: mimeType ?? "",
               localPath,
             });
           } catch (err) {
@@ -554,7 +583,7 @@ export class SlackConnector implements Connector {
             });
             this.conversations.recordBotEngaged(conversationKey);
           } catch (err) {
-            logger.debug(`[slack] failed to add triage reaction: ${err}`);
+            logger.warn(`[slack] failed to add triage reaction: ${reactionErrorHint(err)}`);
           }
           return;
         }
@@ -866,7 +895,7 @@ export class SlackConnector implements Connector {
         name: emoji,
       });
     } catch (err) {
-      logger.warn(`Failed to add reaction: ${err}`);
+      logger.warn(`Failed to add reaction: ${reactionErrorHint(err)}`);
     }
     // A reaction on a message also counts as engagement; mark the target's
     // thread anchor so follow-ups in that thread are treated as bot-engaged.

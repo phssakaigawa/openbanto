@@ -4,7 +4,7 @@
  *
  * A Model Context Protocol (MCP) server that gives AI engines scoped
  * file IO into the knowledge base at `~/.openbanto/knowledge/`. This is
- * the ONLY filesystem path the OpenAI (AiDEA) engine can reach — it has
+ * the ONLY filesystem path the OpenAI-compatible engine can reach — it has
  * no native Read/Write and consumes tools exclusively through the MCP
  * tool-call bridge. Claude may use these tools too, or its native FS
  * access — the recording instructions are written engine-agnostically.
@@ -95,6 +95,17 @@ function scopePath(relInput: unknown): unknown {
   if (rel.length === 0) return relInput;
   // Org-wide escape hatch: shared/ (and bare "shared") map to knowledge/shared.
   if (rel === "shared" || /^shared[/\\]/.test(rel)) return rel;
+  // Idempotency: the system prompt tells the model its files live under
+  // `users/<userKey>/`, so it sometimes passes a path that ALREADY carries that
+  // prefix. Prepending again would double-nest (`users/<k>/users/<k>/…`) and the
+  // read-back — which uses the bare, auto-scoped path — would then miss the file
+  // (writes "succeed" but the 職人 can never recall them). Treat a self-prefixed
+  // path as already scoped. A `users/<other>/…` path is NOT short-circuited, so
+  // it still gets confined under the caller's own subtree (no sibling reach).
+  const selfPrefix = `users/${USER_KEY}`;
+  if (rel === selfPrefix || rel.startsWith(`${selfPrefix}/`) || rel.startsWith(`${selfPrefix}\\`)) {
+    return rel;
+  }
   // Everything else is relative to this speaker's subtree.
   return `users/${USER_KEY}/${rel.replace(/^[/\\]+/, "")}`;
 }

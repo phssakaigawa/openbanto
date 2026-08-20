@@ -8,6 +8,8 @@ import type {
   Session,
   Target,
 } from "../shared/types.js";
+import { scanOrg, extractMention } from "../gateway/org.js";
+import { registerLocalFile } from "../gateway/files.js";
 import {
   accumulateSessionCost,
   createSession,
@@ -30,7 +32,7 @@ import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
 import { resolveEngineConfig, engineIsInteractive, engineSupportsSyncResume } from "../engines/registry.js";
 import type { Guardrail, GuardrailContext } from "../guardrails/registry.js";
-import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
+import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isEmptyOrTimeoutResult, isInteractiveTurnTimeout, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { loadJobs } from "../cron/jobs.js";
@@ -215,10 +217,53 @@ export class SessionManager {
     return this.queue;
   }
 
+  /**
+   * Pick the 職人 (employee) that should handle a message when the connector
+   * didn't bind one. Priority: an explicit `@<employee>` mention in the text,
+   * then — for image attachments — the configured vision employee
+   * (`sessions.imageEmployee`). Returns undefined to fall through to the default
+   * engine. Best-effort: any failure just falls through.
+   */
+  private resolveMessageEmployee(msg: IncomingMessage): Employee | undefined {
+    try {
+      const registry = scanOrg();
+      if (registry.size === 0) return undefined;
+      const mentioned = extractMention(msg.text || "", registry);
+      if (mentioned) return mentioned;
+      const hasImage = (msg.attachments || []).some(
+        (a) => typeof a.mimeType === "string" && a.mimeType.toLowerCase().startsWith("image/"),
+      );
+      if (hasImage) {
+        const key = this.config.sessions?.imageEmployee;
+        if (key) {
+          const emp = registry.get(key);
+          if (emp) return emp;
+          logger.warn(`[route] sessions.imageEmployee "${key}" not found in org directory`);
+        }
+      }
+    } catch (err) {
+      logger.debug(`[route] resolveMessageEmployee failed: ${err}`);
+    }
+    return undefined;
+  }
+
   async route(msg: IncomingMessage, connector: Connector, opts: RouteOptions = {}): Promise<{ sessionId: string } | void> {
     if (await this.handleCommand(msg, connector)) return;
 
     let session = getSessionBySessionKey(msg.sessionKey);
+    // Per-message 職人/engine routing (NEW sessions only — a session's engine is
+    // fixed at creation). The connector binds at most one employee, so this lets a
+    // single Slack app dispatch to different 職人/engines: an explicit @employee
+    // mention, or an image attachment → the configured vision employee
+    // (sessions.imageEmployee, e.g. a claude-backed 名刺係). Plain text with no
+    // match stays on the default engine. No-op when org/ is empty.
+    if (!session && !opts.employee) {
+      const routed = this.resolveMessageEmployee(msg);
+      if (routed) {
+        opts = { ...opts, employee: routed };
+        logger.info(`[route] auto-routed ${msg.sessionKey} → 職人 "${routed.name}" (engine: ${routed.engine})`);
+      }
+    }
     if (!session) {
       session = createSession({
         engine: opts.engine ?? opts.employee?.engine ?? this.config.engines.default,
@@ -476,7 +521,7 @@ export class SessionManager {
       // OpenAI-compatible engine (via its MCP tool-call bridge). Resolve + write
       // the per-turn MCP config for EVERY engine; engines that don't read the
       // path (bob/codex/gemini) simply ignore it. (Previously gated to
-      // `engine === "claude"`, which starved the AiDEA/openai engine of tools.)
+      // `engine === "claude"`, which starved the OpenAI-compatible engine of tools.)
       {
         const mcpConfig = resolveMcpServers(this.config.mcp, employee, {
           connector: connector.name,
@@ -541,6 +586,34 @@ export class SessionManager {
               : ` — NOT the operator; do not address this person as "${operator}"`
             : "";
           promptToRun = `[Speaker: ${safeName}${tag}]\n${promptToRun}`;
+        }
+      }
+
+      // Vision-職人 hand-off: expose image attachments at a gateway URL that a
+      // non-local vision/OCR 職人 (e.g. an external vision/OCR service) can fetch — the Slack
+      // url_private is behind the bot token it can't pass. Register each image
+      // into /api/files and inject the reachable URL so a non-VLM engine
+      // (an OpenAI-compatible LLM) can hand it to a describe_image tool. Gated on
+      // gateway.publicFileBaseUrl; skipped for claude (reads the local file
+      // directly, and has no describe_image tool).
+      const fileBaseUrl = this.config.gateway?.publicFileBaseUrl?.replace(/\/+$/, "");
+      if (fileBaseUrl && session.engine !== "claude") {
+        const imageUrls: string[] = [];
+        for (const att of msg.attachments || []) {
+          if (att.localPath && typeof att.mimeType === "string" && att.mimeType.toLowerCase().startsWith("image/")) {
+            try {
+              const meta = registerLocalFile(att.localPath, att.name);
+              imageUrls.push(`${fileBaseUrl}/api/files/${meta.id}`);
+            } catch (err) {
+              logger.warn(`[vision] failed to register image attachment: ${err}`);
+            }
+          }
+        }
+        if (imageUrls.length > 0) {
+          logger.info(`[vision] exposed ${imageUrls.length} image URL(s) for ${session.id}: ${imageUrls.join(", ")}`);
+          promptToRun +=
+            `\n\n[添付画像] 次のURLで画像を取得できます。内容を読む必要があれば「目」の職人（describe_image ツール）にこのURLを渡し、読み取ってから回答してください:\n` +
+            imageUrls.map((u) => `- ${u}`).join("\n");
         }
       }
 
@@ -668,6 +741,64 @@ export class SessionManager {
         attachments: attachments.length > 0 ? attachments : undefined,
         sessionId: session.id,
       });
+
+      // Empty / timeout retry: when the engine returns nothing usable — neither
+      // result text nor an error (the "(No response from engine)" case), or a
+      // non-interrupt timeout — resend the SAME prompt on the SAME engine session
+      // a bounded number of times before giving up. This runs BEFORE the
+      // poisoned/dead/transient/rate-limit detectors below; those all carry
+      // distinct error signatures, so a genuinely-empty/timeout result is the
+      // only thing this loop acts on and a recovered result flows on normally.
+      //
+      // Opt-in (sessions.retryInteractiveTimeout): also retry the interactive
+      // engine's hard-turn timeout, but with a CONTINUATION prompt rather than a
+      // verbatim resend — that turn may have done real work, so we ask it to
+      // finish rather than start over and duplicate side effects.
+      {
+        const maxEmptyRetries = this.config.sessions?.emptyResponseRetries ?? 2;
+        const retryDelayMs = this.config.sessions?.emptyResponseRetryDelayMs ?? 1500;
+        const retryInteractiveTimeout = this.config.sessions?.retryInteractiveTimeout ?? false;
+        const isRetriable = () =>
+          isEmptyOrTimeoutResult(result) ||
+          (retryInteractiveTimeout && isInteractiveTurnTimeout(result));
+
+        for (
+          let emptyAttempt = 1;
+          emptyAttempt <= maxEmptyRetries && isRetriable();
+          emptyAttempt++
+        ) {
+          const continuation = isInteractiveTurnTimeout(result);
+          logger.warn(
+            `Session ${session.id} got ${continuation ? "an interactive-turn timeout" : "no/timed-out engine response"} — ${continuation ? "continuing" : "resending prompt"} (attempt ${emptyAttempt}/${maxEmptyRetries})`,
+          );
+          // Short wait with heartbeat so the stuck-session reconciler doesn't
+          // treat this backoff as a wedged "running" turn.
+          for (let waited = 0; waited < retryDelayMs; waited += 20_000) {
+            updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+            await new Promise((r) => setTimeout(r, Math.min(20_000, retryDelayMs - waited)));
+          }
+          if (retryDelayMs <= 0) {
+            updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+          }
+          result = await engine.run({
+            prompt: continuation
+              ? "The previous turn timed out before it finished. The conversation history is intact. Continue and complete the original request now; if the work was already finished, reply with the final result."
+              : promptToRun,
+            resumeSessionId: result.sessionId?.trim() || session.engineSessionId || undefined,
+            systemPrompt,
+            cwd: JINN_HOME,
+            bin: engineConfig.bin,
+            model: session.model ?? engineConfig.model,
+            effortLevel,
+            cliFlags: employee?.cliFlags,
+            sshHost: employee?.sshHost,
+            remoteCwd: employee?.remoteCwd,
+            mcpConfigPath,
+            attachments: attachments.length > 0 ? attachments : undefined,
+            sessionId: session.id,
+          });
+        }
+      }
 
       let wasInterrupted = result.error?.startsWith("Interrupted");
 
