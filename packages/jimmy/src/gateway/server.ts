@@ -451,6 +451,12 @@ export async function startGateway(
           // mention gate a no-op (bot replied to everything) even though the value
           // was present in config.yaml / GET /api/config.
           respondTo: c.slack.respondTo,
+          // allowBotsInChannels MUST be forwarded too — same failure mode as
+          // respondTo above: the SlackConnector reads config.allowBotsInChannels
+          // to decide whether foreign bot/webhook posts (e.g. 03plus-notify via
+          // Incoming Webhook) are surfaced. Omitting it here made the connector
+          // skip every bot message despite the value being present in config.yaml.
+          allowBotsInChannels: c.slack.allowBotsInChannels,
           goalExtraction: c.slack.goalExtraction,
           agentsCanvas: c.slack.agentsCanvas,
         },

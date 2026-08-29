@@ -66,6 +66,10 @@ export class SlackConnector implements Connector {
   private channelNameCache = new Map<string, { name?: string; isExtShared: boolean; cachedAt: number }>();
   private userInfoCache = new Map<string, { info: SpeakerInfo; cachedAt: number }>();
   private botUserId: string | null = null;
+  /** Our own Slack bot_id (from auth.test), used to never process our own posts. */
+  private ownBotId: string | null = null;
+  /** Channels where foreign bot/webhook messages are allowed through. */
+  private readonly allowBotsInChannels: Set<string> | null;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly triageConfig: SlackTriageConfig | undefined;
   private readonly respondTo: SlackRespondToConfig | undefined;
@@ -151,6 +155,10 @@ export class SlackConnector implements Connector {
         ? config.allowFrom.split(",").map((value) => value.trim()).filter(Boolean)
         : [];
     this.allowedUsers = allowFrom.length > 0 ? new Set(allowFrom) : null;
+    this.allowBotsInChannels =
+      config.allowBotsInChannels && config.allowBotsInChannels.length > 0
+        ? new Set(config.allowBotsInChannels)
+        : null;
     this.triageConfig = config.triage;
     this.respondTo = config.respondTo;
     this.goalExtractionConfig = config.goalExtraction;
@@ -339,13 +347,27 @@ export class SlackConnector implements Connector {
   async start() {
     this.app.message(async ({ event }) => {
       logger.info(`[slack] Received message event: user=${(event as any).user} channel=${(event as any).channel} channel_type=${(event as any).channel_type ?? "-"} thread_ts=${(event as any).thread_ts ?? "-"} subtype=${(event as any).subtype ?? "-"} text="${((event as any).text || "").slice(0, 50)}"`);
-      // Skip bot's own messages
-      if ((event as any).bot_id) {
+      const eventChannel = (event as any).channel as string;
+      const eventBotId = (event as any).bot_id as string | undefined;
+      const eventUser = (event as any).user as string | undefined;
+      // Never process our OWN messages (avoid reply loops).
+      if (
+        (this.ownBotId && eventBotId === this.ownBotId) ||
+        (this.botUserId && eventUser === this.botUserId)
+      ) {
+        return;
+      }
+      // Foreign bot/webhook messages (they carry a bot_id) are skipped unless
+      // this channel is explicitly allowed to surface them (e.g. 03plus-notify
+      // posting via an Incoming Webhook). See allowBotsInChannels.
+      const botAllowedHere = !!eventBotId && !!this.allowBotsInChannels?.has(eventChannel);
+      if (eventBotId && !botAllowedHere) {
         logger.info(`[slack] Skipping bot message`);
         return;
       }
-      // Skip ghost events from URL unfurls (user=undefined, text="")
-      if (!(event as any).user) {
+      // Ghost events from URL unfurls have no user AND no text. Allowed bot
+      // messages legitimately lack `user`, so only drop genuine ghosts.
+      if (!eventUser && !botAllowedHere) {
         logger.debug(`[slack] Skipping event with no user (likely URL unfurl)`);
         return;
       }
@@ -357,12 +379,13 @@ export class SlackConnector implements Connector {
         logger.debug(`Ignoring old Slack message ${(event as any).ts}`);
         return;
       }
-      if (this.allowedUsers && !this.allowedUsers.has((event as any).user)) {
-        logger.debug(`Ignoring Slack message from unauthorized user ${(event as any).user}`);
+      // allowFrom gates human users only; allowed bot/webhook posts bypass it.
+      if (this.allowedUsers && !botAllowedHere && !this.allowedUsers.has(eventUser as string)) {
+        logger.debug(`Ignoring Slack message from unauthorized user ${eventUser}`);
         return;
       }
 
-      const slackUserId = (event as any).user as string;
+      const slackUserId = (eventUser || (eventBotId ? `bot:${eventBotId}` : "")) as string;
       const rawText = ((event as any).text || "") as string;
       const channelType = ((event as any).channel_type as string) || "channel";
       const threadTs = (event as any).thread_ts as string | undefined;
@@ -389,6 +412,7 @@ export class SlackConnector implements Connector {
       const respondDecision = evaluateRespondPolicy({
         config: this.respondTo,
         channelType,
+        channelId: eventChannel,
         wasMentioned,
         isEngagedThread:
           !!threadTs &&
@@ -629,7 +653,8 @@ export class SlackConnector implements Connector {
     try {
       const authResult = await this.app.client.auth.test();
       this.botUserId = authResult.user_id ?? null;
-      logger.info(`[slack] Bot user ID: ${this.botUserId}`);
+      this.ownBotId = (authResult as any).bot_id ?? null;
+      logger.info(`[slack] Bot user ID: ${this.botUserId} bot_id: ${this.ownBotId}`);
     } catch (err) {
       logger.warn(`[slack] Failed to get bot user ID: ${err}`);
     }
