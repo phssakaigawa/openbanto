@@ -9,7 +9,9 @@ import type {
   SlackRespondToConfig,
   Target,
   SlackGoalExtractionConfig,
+  SlackActionHook,
 } from "../../shared/types.js";
+import { spawn } from "node:child_process";
 import { buildReplyContext, deriveSessionKey, isOldSlackMessage } from "./threads.js";
 import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
@@ -70,6 +72,8 @@ export class SlackConnector implements Connector {
   private ownBotId: string | null = null;
   /** Channels where foreign bot/webhook messages are allowed through. */
   private readonly allowBotsInChannels: Set<string> | null;
+  /** Block Kit button handlers keyed by action_id (see SlackConnectorConfig). */
+  private readonly actionHooks: Record<string, SlackActionHook> | null;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly triageConfig: SlackTriageConfig | undefined;
   private readonly respondTo: SlackRespondToConfig | undefined;
@@ -119,6 +123,60 @@ export class SlackConnector implements Connector {
   }
 
   /**
+   * Run a configured Block Kit button hook: spawn its command with the button
+   * value as the final argv (no shell — the value cannot inject), then post the
+   * command's stdout back into the thread (chunked to Slack's message limit).
+   * Failures post a short diagnostic instead of going silent.
+   */
+  private async runActionHook(
+    actionId: string,
+    hook: SlackActionHook,
+    value: string,
+    client: any,
+    channel: string,
+    threadTs: string,
+    messageTs?: string,
+  ): Promise<void> {
+    const post = async (text: string) => {
+      const MAX = 3500;
+      for (let i = 0; i < Math.max(text.length, 1); i += MAX) {
+        await client.chat
+          .postMessage({ channel, thread_ts: threadTs, text: text.slice(i, i + MAX) })
+          .catch((err: unknown) => logger.warn(`[slack] action ${actionId} post failed: ${this.formatSlackError(err)}`));
+      }
+    };
+    // Swap the 👀 running marker on the card for a terminal ✅/❌.
+    const finishReaction = async (name: string) => {
+      if (!messageTs) return;
+      await client.reactions.remove({ channel, timestamp: messageTs, name: "eyes" }).catch(() => {});
+      await client.reactions.add({ channel, timestamp: messageTs, name }).catch(() => {});
+    };
+    try {
+      const child = spawn(hook.command, [...(hook.args ?? []), value], {
+        timeout: hook.timeoutMs ?? 600_000,
+      });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (d) => { out += d.toString(); });
+      child.stderr.on("data", (d) => { err += d.toString(); });
+      const code: number | null = await new Promise((resolve) => {
+        child.on("close", (c) => resolve(c));
+        child.on("error", (e) => { err += String(e); resolve(-1); });
+      });
+      if (code === 0 && out.trim()) {
+        await post(out.trim());
+        await finishReaction("white_check_mark");
+      } else {
+        await post(`⚠️ ${actionId} 失敗 (exit ${code})${err.trim() ? `\n${err.trim().slice(0, 500)}` : ""}`);
+        await finishReaction("x");
+      }
+    } catch (e) {
+      await post(`⚠️ ${actionId} 実行エラー: ${e instanceof Error ? e.message : String(e)}`);
+      await finishReaction("x");
+    }
+  }
+
+  /**
    * Set the AI assistant typing status in a thread.
    * Uses Slack's assistant.threads.setStatus API for native animated indicator.
    */
@@ -158,6 +216,10 @@ export class SlackConnector implements Connector {
     this.allowBotsInChannels =
       config.allowBotsInChannels && config.allowBotsInChannels.length > 0
         ? new Set(config.allowBotsInChannels)
+        : null;
+    this.actionHooks =
+      config.actionHooks && Object.keys(config.actionHooks).length > 0
+        ? config.actionHooks
         : null;
     this.triageConfig = config.triage;
     this.respondTo = config.respondTo;
@@ -666,6 +728,37 @@ export class SlackConnector implements Connector {
       logger.warn(
         "[slack] respondTo mention gate is configured but the bot user ID could not be resolved — un-mentioned messages in mention scopes will be dropped",
       );
+    }
+
+    // Block Kit button handlers (interactive on-demand actions). Requires the
+    // Slack app to have Interactivity enabled; over Socket Mode the payloads
+    // arrive on the existing connection, no request URL needed.
+    for (const [actionId, hook] of Object.entries(this.actionHooks ?? {})) {
+      this.app.action(actionId, async ({ ack, body, client }) => {
+        await ack();
+        const b = body as any;
+        const value = b.actions?.[0]?.value ?? "";
+        const channel = b.channel?.id ?? b.container?.channel_id;
+        const messageTs = b.message?.ts ?? b.container?.message_ts;
+        const threadTs = b.message?.thread_ts || messageTs;
+        const user = b.user?.id;
+        logger.info(`[slack] action ${actionId} by ${user} value="${value}"`);
+        // At-a-glance progress on the card itself: 👀 while running, swapped to
+        // ✅/❌ when runActionHook finishes.
+        if (messageTs) {
+          await client.reactions
+            .add({ channel, timestamp: messageTs, name: "eyes" })
+            .catch((err) => logger.warn(`[slack] action ${actionId} reaction add failed: ${this.formatSlackError(err)}`));
+        }
+        if (hook.runningText) {
+          await client.chat
+            .postMessage({ channel, thread_ts: threadTs, text: hook.runningText })
+            .catch((err) => logger.warn(`[slack] action ${actionId} runningText post failed: ${this.formatSlackError(err)}`));
+        }
+        // Fire-and-forget: the command may run for minutes (e.g. CPU whisper);
+        // ack() has already been sent so Slack won't retry.
+        void this.runActionHook(actionId, hook, value, client, channel, threadTs, messageTs);
+      });
     }
 
     this.app.event("reaction_added", async ({ event }) => {

@@ -416,6 +416,18 @@ export interface SlackRespondToConfig {
   engagedThreads?: boolean;
 }
 
+/** A single Block Kit button handler (see SlackConnectorConfig.actionHooks). */
+export interface SlackActionHook {
+  /** Executable to spawn. The button's `value` is appended as the last argv. */
+  command: string;
+  /** Optional fixed args placed before the button value. */
+  args?: string[];
+  /** Posted into the thread immediately on click (before the command finishes). */
+  runningText?: string;
+  /** Kill the command after this many ms (default 600000). */
+  timeoutMs?: number;
+}
+
 export interface SlackConnectorConfig {
   /** Unique instance identifier (e.g. "slack-support") */
   id?: string;
@@ -432,6 +444,15 @@ export interface SlackConnectorConfig {
    * processes its OWN messages regardless. Example: `["C0AGEEGKLUU"]`.
    */
   allowBotsInChannels?: string[];
+  /**
+   * Block Kit interactive-button handlers, keyed by the button's `action_id`.
+   * When a user clicks a button, `command` is spawned with the button's `value`
+   * appended as the final argv element (never shell-interpolated, so the value
+   * cannot inject) and its stdout is posted back into the message's thread.
+   * Lets a bot drive on-demand actions (e.g. transcribe THIS recording) without
+   * bespoke per-app code. Requires the Slack app to have Interactivity enabled.
+   */
+  actionHooks?: Record<string, SlackActionHook>;
   /** Deterministic per-scope response gate (DM / group DM / channel). */
   respondTo?: SlackRespondToConfig;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */

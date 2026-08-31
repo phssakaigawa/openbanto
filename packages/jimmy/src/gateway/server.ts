@@ -457,6 +457,7 @@ export async function startGateway(
           // Incoming Webhook) are surfaced. Omitting it here made the connector
           // skip every bot message despite the value being present in config.yaml.
           allowBotsInChannels: c.slack.allowBotsInChannels,
+          actionHooks: c.slack.actionHooks,
           goalExtraction: c.slack.goalExtraction,
           agentsCanvas: c.slack.agentsCanvas,
         },
