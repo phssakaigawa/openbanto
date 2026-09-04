@@ -402,6 +402,13 @@ export interface SlackRespondToConfig {
   /** Public and private channels. Default: "always". */
   channel?: SlackRespondMode;
   /**
+   * Per-channel overrides keyed by Slack channel ID (e.g. "C0AGEEGKLUU").
+   * Takes precedence over the scope default above, letting a single channel
+   * respond without an @-mention ("always") while other channels stay gated,
+   * or vice versa. Example: `{ "C0AGEEGKLUU": "always" }`.
+   */
+  channels?: Record<string, SlackRespondMode>;
+  /**
    * In "mention" scopes, keep replying inside threads the bot has already
    * engaged (replied or reacted in) without requiring a re-mention on every
    * message. Default: true.
@@ -418,6 +425,13 @@ export interface SlackConnectorConfig {
   botToken: string;
   allowFrom?: string | string[];
   ignoreOldMessagesOnBoot?: boolean;
+  /**
+   * Slack channel IDs where bot/webhook messages (which normally have a
+   * `bot_id` and are skipped to avoid loops) should be processed — e.g. a
+   * channel fed by an Incoming Webhook like "03plus-notify". The bot never
+   * processes its OWN messages regardless. Example: `["C0AGEEGKLUU"]`.
+   */
+  allowBotsInChannels?: string[];
   /** Deterministic per-scope response gate (DM / group DM / channel). */
   respondTo?: SlackRespondToConfig;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */

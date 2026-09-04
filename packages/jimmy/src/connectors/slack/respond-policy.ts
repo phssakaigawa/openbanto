@@ -29,15 +29,19 @@ export function scopeForChannelType(channelType: string | undefined): RespondSco
 export function resolveRespondMode(
   config: SlackRespondToConfig | undefined,
   scope: RespondScope,
+  channelId?: string,
 ): SlackRespondMode {
-  const raw = config?.[scope];
+  // Per-channel override wins over the scope default.
+  const override = channelId ? config?.channels?.[channelId] : undefined;
+  const raw = override ?? config?.[scope];
   return raw === "mention" || raw === "never" ? raw : "always";
 }
 
-/** True when any scope requires an @-mention. */
+/** True when any scope (or per-channel override) requires an @-mention. */
 export function hasMentionScope(config: SlackRespondToConfig | undefined): boolean {
   if (!config) return false;
-  return [config.im, config.mpim, config.channel].includes("mention");
+  const values = [config.im, config.mpim, config.channel, ...Object.values(config.channels ?? {})];
+  return values.includes("mention");
 }
 
 /**
@@ -51,6 +55,8 @@ export function respondPolicyNeedsTracking(config: SlackRespondToConfig | undefi
 export interface RespondPolicyInput {
   config: SlackRespondToConfig | undefined;
   channelType: string | undefined;
+  /** Slack channel ID, used for per-channel overrides. */
+  channelId?: string;
   wasMentioned: boolean;
   /** Whether the message sits in a thread the bot has already engaged. */
   isEngagedThread: boolean;
@@ -60,7 +66,7 @@ export type RespondDecision = { allow: true } | { allow: false; reason: string }
 
 export function evaluateRespondPolicy(input: RespondPolicyInput): RespondDecision {
   const scope = scopeForChannelType(input.channelType);
-  const mode = resolveRespondMode(input.config, scope);
+  const mode = resolveRespondMode(input.config, scope, input.channelId);
   if (mode === "never") {
     return { allow: false, reason: `respondTo.${scope}=never` };
   }
