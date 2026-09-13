@@ -71,6 +71,12 @@ export function scanOrg(): Map<string, Employee> {
                 ? data.provides.filter((s: unknown) => s && typeof s === "object" && typeof (s as any).name === "string" && typeof (s as any).description === "string")
                   .map((s: any) => ({ name: s.name as string, description: s.description as string }))
                 : undefined,
+              // Channel-scoped / hidden employees (存在秘匿): must survive YAML
+              // parsing or every downstream guard silently no-ops.
+              channels: Array.isArray(data.channels)
+                ? data.channels.filter((c: unknown): c is string => typeof c === "string" && c.trim().length > 0).map((c: string) => c.trim())
+                : undefined,
+              hidden: data.hidden === true ? true : undefined,
             };
             registry.set(employee.name, employee);
           }

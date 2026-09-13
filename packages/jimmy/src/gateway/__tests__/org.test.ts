@@ -146,3 +146,33 @@ describe("isValidSshHost", () => {
     expect(isValidSshHost("")).toBe(false);
   });
 });
+
+describe("scanOrg — channels / hidden (channel-scoped employees)", () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "org-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("parses channels list and hidden flag from YAML", () => {
+    writeYaml("gw", "k8s.yaml", [
+      "name: k8s",
+      "displayName: k8s受入係",
+      "persona: test",
+      'channels: ["C111", "  C222  ", ""]',
+      "hidden: true",
+    ].join("\n"));
+    const emp = scanOrg().get("k8s");
+    expect(emp?.channels).toEqual(["C111", "C222"]);
+    expect(emp?.hidden).toBe(true);
+  });
+
+  it("omits channels/hidden when absent or invalid", () => {
+    writeYaml("gw", "plain.yaml", ["name: plain", "persona: test", "hidden: yes-ish", "channels: notalist"].join("\n"));
+    const emp = scanOrg().get("plain");
+    expect(emp?.channels).toBeUndefined();
+    expect(emp?.hidden).toBeUndefined();
+  });
+});
