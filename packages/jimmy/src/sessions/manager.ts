@@ -649,7 +649,7 @@ export class SessionManager {
           if (att.localPath && !isImage) {
             try {
               const meta = registerLocalFile(att.localPath, att.name);
-              fileRefs.push(`${att.name ?? "file"} → ${fileBaseUrl}/api/files/${meta.id}`);
+              fileRefs.push(`元のファイル名「${att.name ?? "file"}」 ／ 取得URL: ${fileBaseUrl}/api/files/${meta.id}`);
             } catch (err) {
               logger.warn(`[attachments] failed to register file attachment: ${err}`);
             }
@@ -658,7 +658,10 @@ export class SessionManager {
         if (fileRefs.length > 0) {
           logger.info(`[attachments] exposed ${fileRefs.length} file URL(s) for ${session.id}`);
           promptToRun +=
-            `\n\n[添付ファイル] 次のURLで実体を取得できます。Nextcloud 等へアップロードする際は、base64 ではなくアップロードツールの sourceUrl にこのURLを渡してください:\n` +
+            `\n\n[添付ファイル] 以下は今回の添付ファイルです。取り扱いの規則:\n` +
+            `- 保存やアップロードの既定ファイル名には「元のファイル名」を使い、ユーザーに名前を聞き返さないこと（一時パスの UUID 名は使わない）。\n` +
+            `- Nextcloud 等へアップロードする際は、base64 ではなくアップロードツールの sourceUrl に下記「取得URL」を渡すこと。\n` +
+            `- アップロード完了後は create_share で内部共有リンクを発行し、そのリンクをユーザーに貼って知らせること。\n` +
             fileRefs.map((u) => `- ${u}`).join("\n");
         }
       }
