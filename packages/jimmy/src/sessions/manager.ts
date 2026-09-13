@@ -638,6 +638,31 @@ export class SessionManager {
         }
       }
 
+      // 非画像の添付（PDF 等）も /api/files の URL を提示する。Nextcloud 等の HTTP
+      // コネクタは gw-banto01 の localPath を読めないため、アップロード系ツールには
+      // base64 ではなく sourceUrl としてこの URL を渡させる（51 バイト空ファイル事象 #452 の恒久対策）。
+      if (fileBaseUrl && session.engine !== "claude") {
+        const fileRefs: string[] = [];
+        for (const att of msg.attachments || []) {
+          const isImage =
+            typeof att.mimeType === "string" && att.mimeType.toLowerCase().startsWith("image/");
+          if (att.localPath && !isImage) {
+            try {
+              const meta = registerLocalFile(att.localPath, att.name);
+              fileRefs.push(`${att.name ?? "file"} → ${fileBaseUrl}/api/files/${meta.id}`);
+            } catch (err) {
+              logger.warn(`[attachments] failed to register file attachment: ${err}`);
+            }
+          }
+        }
+        if (fileRefs.length > 0) {
+          logger.info(`[attachments] exposed ${fileRefs.length} file URL(s) for ${session.id}`);
+          promptToRun +=
+            `\n\n[添付ファイル] 次のURLで実体を取得できます。Nextcloud 等へアップロードする際は、base64 ではなくアップロードツールの sourceUrl にこのURLを渡してください:\n` +
+            fileRefs.map((u) => `- ${u}`).join("\n");
+        }
+      }
+
       // Guardrail — beforeTurn hook. Sits beside the budget check, before
       // engine.run(). allow → continue; deny → reply the reason + end the turn
       // (audit still runs); require_approval → park the queue and wait on a human
