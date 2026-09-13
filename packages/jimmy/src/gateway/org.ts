@@ -71,6 +71,12 @@ export function scanOrg(): Map<string, Employee> {
                 ? data.provides.filter((s: unknown) => s && typeof s === "object" && typeof (s as any).name === "string" && typeof (s as any).description === "string")
                   .map((s: any) => ({ name: s.name as string, description: s.description as string }))
                 : undefined,
+              // Channel-scoped / hidden employees (存在秘匿): must survive YAML
+              // parsing or every downstream guard silently no-ops.
+              channels: Array.isArray(data.channels)
+                ? data.channels.filter((c: unknown): c is string => typeof c === "string" && c.trim().length > 0).map((c: string) => c.trim())
+                : undefined,
+              hidden: data.hidden === true ? true : undefined,
             };
             registry.set(employee.name, employee);
           }
@@ -157,9 +163,28 @@ export function extractMention(
   text: string,
   registry: Map<string, Employee>,
 ): Employee | undefined {
+  // Explicit @slug or @displayName anywhere in the text.
   for (const [name, employee] of registry) {
     if (text.includes(`@${name}`)) {
       return employee;
+    }
+    if (employee.displayName && text.includes(`@${employee.displayName}`)) {
+      return employee;
+    }
+  }
+
+  // Addressing by name at the start of the message (natural Japanese style:
+  // 「k8s受入係、〜して」). Strip leading connector mention tokens (<@U123>)
+  // first. Require a separator right after the name so possessive phrasing
+  // like 「k8s受入係の使い方は？」 stays with the default persona.
+  const lead = text.replace(/^\s*(?:<@[^>]+>\s*)+/, "").trimStart();
+  for (const [name, employee] of registry) {
+    for (const label of [employee.displayName, name]) {
+      if (!label || !lead.startsWith(label)) continue;
+      const rest = lead.slice(label.length);
+      if (rest === "" || /^[\s、。，,．.:：！!？?]/.test(rest)) {
+        return employee;
+      }
     }
   }
   return undefined;

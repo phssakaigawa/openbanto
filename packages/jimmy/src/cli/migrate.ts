@@ -154,7 +154,7 @@ function buildMigrateArgs(engine: string, prompt: string): string[] {
 export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Promise<void> {
   // Ensure instance exists
   if (!fs.existsSync(JINN_HOME)) {
-    console.error(`${RED}エラー:${RESET} ${JINN_HOME} が存在しません。"ryoko setup" を実行してください。`);
+    console.error(`${RED}エラー:${RESET} ${JINN_HOME} が存在しません。"banto setup" を実行してください。`);
     process.exit(1);
   }
 
@@ -195,7 +195,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
 
   // --check: just show what's pending, don't apply
   if (opts.check) {
-    console.log(`${DIM}ryoko migrate${RESET} で適用してください。\n`);
+    console.log(`${DIM}banto migrate${RESET} で適用してください。\n`);
     return;
   }
 
@@ -257,7 +257,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
 
     console.log(`\n${GREEN}マイグレーションが完了しました。${RESET}\n`);
   } catch (err: any) {
-    console.error(`\n${RED}マイグレーションに失敗しました。${RESET} ryoko migrate で再試行できます。`);
+    console.error(`\n${RED}マイグレーションに失敗しました。${RESET} banto migrate で再試行できます。`);
     console.error(`ステージング済みファイルは ${MIGRATIONS_DIR} に残っています。\n`);
     process.exit(1);
   }
@@ -275,7 +275,7 @@ async function applyAutoMigrations(
   let applied = 0;
 
   // Resolve portal name once so template files (.md/.yaml) get the same
-  // {{portalName}} substitution as `ryoko setup` would apply.
+  // {{portalName}} substitution as `banto setup` would apply.
   const portalName = readPortalName();
   const replacements = buildTemplateReplacements(portalName);
   let skippedExisting = 0;
@@ -335,7 +335,7 @@ async function applyAutoMigrations(
 
   if (skippedExisting > 0) {
     console.log(`\n${YELLOW}Auto-migration partially applied.${RESET} ${applied} file(s) added, ${configChanges} config value(s) updated, ${skippedExisting} existing file(s) need AI merge.`);
-    console.log(`${YELLOW}Version was not updated.${RESET} Run ${RESET}ryoko migrate${YELLOW} (without --auto) to merge the skipped files and complete the migration.${RESET}`);
+    console.log(`${YELLOW}Version was not updated.${RESET} Run ${RESET}banto migrate${YELLOW} (without --auto) to merge the skipped files and complete the migration.${RESET}`);
     console.log(`${DIM}Staged migration files remain in ${MIGRATIONS_DIR}.${RESET}\n`);
     return;
   }

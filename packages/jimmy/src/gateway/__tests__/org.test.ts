@@ -146,3 +146,68 @@ describe("isValidSshHost", () => {
     expect(isValidSshHost("")).toBe(false);
   });
 });
+
+describe("scanOrg — channels / hidden (channel-scoped employees)", () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "org-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("parses channels list and hidden flag from YAML", () => {
+    writeYaml("gw", "k8s.yaml", [
+      "name: k8s",
+      "displayName: k8s受入係",
+      "persona: test",
+      'channels: ["C111", "  C222  ", ""]',
+      "hidden: true",
+    ].join("\n"));
+    const emp = scanOrg().get("k8s");
+    expect(emp?.channels).toEqual(["C111", "C222"]);
+    expect(emp?.hidden).toBe(true);
+  });
+
+  it("omits channels/hidden when absent or invalid", () => {
+    writeYaml("gw", "plain.yaml", ["name: plain", "persona: test", "hidden: yes-ish", "channels: notalist"].join("\n"));
+    const emp = scanOrg().get("plain");
+    expect(emp?.channels).toBeUndefined();
+    expect(emp?.hidden).toBeUndefined();
+  });
+});
+
+describe("extractMention — 呼びかけスタイル", () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "org-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function registryWithK8s() {
+    writeYaml("gw", "k8s.yaml", ["name: k8s", "displayName: k8s受入係", "persona: test"].join("\n"));
+    const { extractMention } = await import("../org.js");
+    return { registry: scanOrg(), extractMention };
+  }
+
+  it("@slug / @displayName はどこにあっても拾う", async () => {
+    const { registry, extractMention } = await registryWithK8s();
+    expect(extractMention("お願い @k8s これやって", registry)?.name).toBe("k8s");
+    expect(extractMention("お願い @k8s受入係 これやって", registry)?.name).toBe("k8s");
+  });
+
+  it("文頭の呼びかけ(区切り文字付き)で拾う。bot メンションは剥がす", async () => {
+    const { registry, extractMention } = await registryWithK8s();
+    expect(extractMention("k8s受入係、aidea-questionの状態を確認して", registry)?.name).toBe("k8s");
+    expect(extractMention("<@U0BOT> k8s受入係 状態確認して", registry)?.name).toBe("k8s");
+    expect(extractMention("<@U0BOT>k8s受入係！お願い", registry)?.name).toBe("k8s");
+  });
+
+  it("所有格・話題としての言及ではルートしない", async () => {
+    const { registry, extractMention } = await registryWithK8s();
+    expect(extractMention("k8s受入係の使い方を教えて", registry)).toBeUndefined();
+    expect(extractMention("ところで k8s受入係 って何ができる？", registry)).toBeUndefined();
+  });
+});

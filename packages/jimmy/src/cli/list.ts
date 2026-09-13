@@ -13,7 +13,7 @@ export async function runList(): Promise<void> {
   const instances = loadInstances();
 
   if (instances.length === 0) {
-    console.log("インスタンスが見つかりません。\"ryoko setup\" でデフォルトインスタンスを作成してください。");
+    console.log("インスタンスが見つかりません。\"banto setup\" でデフォルトインスタンスを作成してください。");
     return;
   }
 

@@ -103,9 +103,9 @@ function askYesNo(question: string, defaultYes: boolean): Promise<boolean> {
  * Offer to enable the interactive (PTY) Claude engine, then persist the choice.
  *
  * - Skips silently in non-interactive shells (CI / cron / piped) — never blocks
- *   an automated `ryoko update`.
+ *   an automated `banto update`.
  * - By default only asks when the user hasn't decided yet (key absent). Pass
- *   `{ force: true }` to re-ask even when already set (e.g. fresh `ryoko setup`).
+ *   `{ force: true }` to re-ask even when already set (e.g. fresh `banto setup`).
  */
 export async function promptInteractive(opts: { force?: boolean } = {}): Promise<void> {
   // Never prompt in automation: no TTY, or a CI runner that allocated a fake one.
@@ -118,7 +118,7 @@ export async function promptInteractive(opts: { force?: boolean } = {}): Promise
   console.log(`  ${DIM}ON にすると Claude の作業ターンを PTY（cc_entrypoint=cli）で実行し、Max${RESET}`);
   console.log(`  ${DIM}サブスクリプション課金になります（API 従量課金を回避）。${RESET}`);
   console.log(`  ${DIM}注意: SSH リモート実行の従業員は headless 'claude -p' にフォールバックします。${RESET}`);
-  console.log(`  ${DIM}OFF（既定）は従来どおり headless 'claude -p'。後から 'ryoko config interactive on|off' で変更可。${RESET}`);
+  console.log(`  ${DIM}OFF（既定）は従来どおり headless 'claude -p'。後から 'banto config interactive on|off' で変更可。${RESET}`);
 
   const enable = await askYesNo("有効にしますか？", current === true);
   const changed = setInteractiveSetting(enable);

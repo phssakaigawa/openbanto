@@ -42,15 +42,15 @@ export async function runUpdate(opts: {
   if (!opts.noMigrate && fs.existsSync(JINN_HOME)) {
     console.log(`\n${YELLOW}Applying instance migrations...${RESET}\n`);
     try {
-      run("ryoko", buildBantoArgs(["migrate", "--auto"]));
+      run("banto", buildBantoArgs(["migrate", "--auto"]));
     } catch {
       console.error(`\n${RED}Migration failed.${RESET}`);
-      console.error(`The CLI update succeeded. Retry migrations with: ${DIM}ryoko migrate --auto${RESET}\n`);
+      console.error(`The CLI update succeeded. Retry migrations with: ${DIM}banto migrate --auto${RESET}\n`);
       process.exit(1);
     }
   } else if (!opts.noMigrate) {
     console.log(`\n${YELLOW}No instance found at ${JINN_HOME}.${RESET} Skipping migrations.`);
-    console.log(`Run ${DIM}ryoko setup${RESET} to create one.\n`);
+    console.log(`Run ${DIM}banto setup${RESET} to create one.\n`);
   }
 
   // Offer the interactive (PTY, Max-subsidized) engine on first update after it

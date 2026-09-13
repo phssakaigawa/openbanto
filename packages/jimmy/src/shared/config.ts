@@ -6,7 +6,7 @@ import type { JinnConfig } from "./types.js";
 export function loadConfig(): JinnConfig {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(
-      `Banto config not found at ${CONFIG_PATH}. Run "ryoko setup" first.`
+      `Banto config not found at ${CONFIG_PATH}. Run "banto setup" first.`
     );
   }
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");

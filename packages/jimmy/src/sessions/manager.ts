@@ -39,6 +39,7 @@ import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
 import { checkBudget } from "../gateway/budgets.js";
 import { resolveMcpServers, writeMcpConfigFile, cleanupMcpConfigFile } from "../mcp/resolver.js";
+import { employeeUsableInChannel } from "../shared/employee-access.js";
 
 export interface RouteOptions {
   employee?: Employee;
@@ -229,7 +230,13 @@ export class SessionManager {
       const registry = scanOrg();
       if (registry.size === 0) return undefined;
       const mentioned = extractMention(msg.text || "", registry);
-      if (mentioned) return mentioned;
+      if (mentioned) {
+        if (!employeeUsableInChannel(mentioned, msg.channel)) {
+          logger.debug(`[route] 職人 "${mentioned.name}" is channel-scoped and not available in ${msg.channel}; ignoring mention`);
+          return undefined;
+        }
+        return mentioned;
+      }
       const hasImage = (msg.attachments || []).some(
         (a) => typeof a.mimeType === "string" && a.mimeType.toLowerCase().startsWith("image/"),
       );
@@ -237,6 +244,10 @@ export class SessionManager {
         const key = this.config.sessions?.imageEmployee;
         if (key) {
           const emp = registry.get(key);
+          if (emp && !employeeUsableInChannel(emp, msg.channel)) {
+            logger.debug(`[route] vision 職人 "${emp.name}" is channel-scoped and not available in ${msg.channel}`);
+            return undefined;
+          }
           if (emp) return emp;
           logger.warn(`[route] sessions.imageEmployee "${key}" not found in org directory`);
         }
@@ -249,6 +260,16 @@ export class SessionManager {
 
   async route(msg: IncomingMessage, connector: Connector, opts: RouteOptions = {}): Promise<{ sessionId: string } | void> {
     if (await this.handleCommand(msg, connector)) return;
+
+    // Channel-scoped employee guard (covers connector-bound employees and cron,
+    // which reach route() with opts.employee already set). Outside its channels
+    // the employee is stripped and the message falls back to the default engine.
+    if (opts.employee && !employeeUsableInChannel(opts.employee, msg.channel)) {
+      logger.warn(
+        `[route] 職人 "${opts.employee.name}" is channel-scoped (not available in ${msg.channel || "no-channel"}); falling back to default engine`,
+      );
+      opts = { ...opts, employee: undefined };
+    }
 
     let session = getSessionBySessionKey(msg.sessionKey);
     // Per-message 職人/engine routing (NEW sessions only — a session's engine is
@@ -614,6 +635,34 @@ export class SessionManager {
           promptToRun +=
             `\n\n[添付画像] 次のURLで画像を取得できます。内容を読む必要があれば「目」の職人（describe_image ツール）にこのURLを渡し、読み取ってから回答してください:\n` +
             imageUrls.map((u) => `- ${u}`).join("\n");
+        }
+      }
+
+      // 非画像の添付（PDF 等）も /api/files の URL を提示する。Nextcloud 等の HTTP
+      // コネクタは gw-banto01 の localPath を読めないため、アップロード系ツールには
+      // base64 ではなく sourceUrl としてこの URL を渡させる（51 バイト空ファイル事象 #452 の恒久対策）。
+      if (fileBaseUrl && session.engine !== "claude") {
+        const fileRefs: string[] = [];
+        for (const att of msg.attachments || []) {
+          const isImage =
+            typeof att.mimeType === "string" && att.mimeType.toLowerCase().startsWith("image/");
+          if (att.localPath && !isImage) {
+            try {
+              const meta = registerLocalFile(att.localPath, att.name);
+              fileRefs.push(`元のファイル名「${att.name ?? "file"}」 ／ 取得URL: ${fileBaseUrl}/api/files/${meta.id}`);
+            } catch (err) {
+              logger.warn(`[attachments] failed to register file attachment: ${err}`);
+            }
+          }
+        }
+        if (fileRefs.length > 0) {
+          logger.info(`[attachments] exposed ${fileRefs.length} file URL(s) for ${session.id}`);
+          promptToRun +=
+            `\n\n[添付ファイル] 以下は今回の添付ファイルです。取り扱いの規則:\n` +
+            `- 保存やアップロードの既定ファイル名には「元のファイル名」を使い、ユーザーに名前を聞き返さないこと（一時パスの UUID 名は使わない）。\n` +
+            `- Nextcloud 等へアップロードする際は、base64 ではなくアップロードツールの sourceUrl に下記「取得URL」を渡すこと。\n` +
+            `- アップロード完了後は create_share で内部共有リンクを発行し、そのリンクを「コードブロックやコード書式（バッククォート）に入れず、素のURL（クリック可能なリンク）」のままユーザーに貼って知らせること。\n` +
+            fileRefs.map((u) => `- ${u}`).join("\n");
         }
       }
 

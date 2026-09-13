@@ -3,7 +3,7 @@
  *
  * A migration version directory may ship a `config-patch.json` describing
  * key-level changes to the instance config. Patches are applied during
- * `ryoko migrate --auto` (i.e. on `ryoko update`) so that shipped default
+ * `banto migrate --auto` (i.e. on `banto update`) so that shipped default
  * values can evolve WITHOUT clobbering values the user has customized.
  *
  * Per-op semantics (see {@link ConfigPatchOp}):

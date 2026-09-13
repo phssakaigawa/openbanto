@@ -246,6 +246,16 @@ export interface Employee {
   sshHost?: string;
   /** Working directory on the remote host (only used together with sshHost). */
   remoteCwd?: string;
+  /**
+   * If set, this employee is usable and visible ONLY for conversations in
+   * these connector channel IDs (e.g. Slack channel IDs). Everywhere else the
+   * employee is excluded from the org roster context, cannot be @-routed, and
+   * delegation to it is rejected. Contexts with no channel (cron, web UI
+   * sessions without a parent) count as "not in the list".
+   */
+  channels?: string[];
+  /** Exclude from the org roster context everywhere (stealth employee). */
+  hidden?: boolean;
 }
 
 /** A service that an employee can provide to other employees/departments. */
@@ -342,8 +352,12 @@ export interface McpGlobalConfig {
   knowledge?: {
     enabled: boolean;
   };
-  /** Custom MCP servers defined by the user */
-  custom?: Record<string, (McpServerStdioConfig | McpServerUrlConfig) & { enabled?: boolean }>;
+  /**
+   * Custom MCP servers defined by the user.
+   * `employees`: if set, ONLY the named employees receive this server — the
+   * default (no-employee) persona and other employees never see its tools.
+   */
+  custom?: Record<string, (McpServerStdioConfig | McpServerUrlConfig) & { enabled?: boolean; employees?: string[] }>;
 }
 
 export interface WebConnectorConfig {}
@@ -416,6 +430,18 @@ export interface SlackRespondToConfig {
   engagedThreads?: boolean;
 }
 
+/** A single Block Kit button handler (see SlackConnectorConfig.actionHooks). */
+export interface SlackActionHook {
+  /** Executable to spawn. The button's `value` is appended as the last argv. */
+  command: string;
+  /** Optional fixed args placed before the button value. */
+  args?: string[];
+  /** Posted into the thread immediately on click (before the command finishes). */
+  runningText?: string;
+  /** Kill the command after this many ms (default 600000). */
+  timeoutMs?: number;
+}
+
 export interface SlackConnectorConfig {
   /** Unique instance identifier (e.g. "slack-support") */
   id?: string;
@@ -432,6 +458,15 @@ export interface SlackConnectorConfig {
    * processes its OWN messages regardless. Example: `["C0AGEEGKLUU"]`.
    */
   allowBotsInChannels?: string[];
+  /**
+   * Block Kit interactive-button handlers, keyed by the button's `action_id`.
+   * When a user clicks a button, `command` is spawned with the button's `value`
+   * appended as the final argv element (never shell-interpolated, so the value
+   * cannot inject) and its stdout is posted back into the message's thread.
+   * Lets a bot drive on-demand actions (e.g. transcribe THIS recording) without
+   * bespoke per-app code. Requires the Slack app to have Interactivity enabled.
+   */
+  actionHooks?: Record<string, SlackActionHook>;
   /** Deterministic per-scope response gate (DM / group DM / channel). */
   respondTo?: SlackRespondToConfig;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */

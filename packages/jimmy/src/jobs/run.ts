@@ -9,7 +9,7 @@ import { assertLoopbackGatewayUrl } from "./notify.js";
 import { pruneOldJobs, writeJobState, type JobState } from "./state.js";
 
 /**
- * `ryoko job run` — launch a shell command as a detached, self-waking job.
+ * `banto job run` — launch a shell command as a detached, self-waking job.
  *
  * The command itself runs under a monitor process spawned with
  * `detached: true` (Node calls setsid(2) on POSIX — no external `setsid`
