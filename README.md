@@ -59,11 +59,42 @@ openbanto start
 
 ## 🍵 OpenBanto と OpenRyoko の違い
 
-**OpenBanto ＝ [OpenRyoko](https://github.com/rsensui2/OpenRyoko) ＋ IBM Bob。** 本質的な追加は1点、**LLM エンジンとして IBM Bob（bobshell）を第一級で使えるようにした**ことです：
+**OpenBanto ＝ [OpenRyoko](https://github.com/rsensui2/OpenRyoko) ＋ IBM Bob ＋ 「組織で安全に運用するための拡張」。**
+出発点は「LLM エンジンとして IBM Bob（bobshell）を第一級で使えるようにする」ことでしたが、
+その後の開発で以下の領域を独自に拡張しています（いずれも本リポジトリでマージ済みの実装）。
 
-- 🤖 **IBM Bob を既定エンジンに** — `bob run` を one-shot／セッション（`--resume` で会話継続）両対応の第一級エンジンとして実装。モデルは team／API キーに紐づき、`BOB_API_KEY` で認証
+### 1. エンジンのプラガブル化（Bob を起点に汎用化）
 
-そのほかは、Bob 対応に伴う**付随的な整備**です：**WhatsApp を optional plugin 化**してコア配布を MIT クリーンに（GPL の baileys を optional peer dep 化）、**番頭ペルソナ＋「ご記帳」オンボーディング**、そして `~/.ryoko`／`~/.jinn` → **`~/.openbanto`** へのリブランド（自動マイグレーション付き）。
+- 🤖 **IBM Bob を既定エンジンに** — `bob run` を one-shot／セッション（`--resume`）両対応の第一級エンジンとして実装。モデルは team／API キーに紐づき、`BOB_API_KEY` で認証
+- 🔌 **プラガブルエンジン SDK + レジストリ** — エンジンをプラグインとして追加できる仕組み（Bob が最初のプラグイン）
+- 🌐 **汎用 OpenAI 互換エンジン** — ローカル LLM や社内ゲートウェイ（vLLM 等）を Web フォームから登録して番頭のエンジンにできる
+- 🧰 **OpenAI 互換エンジンでも MCP ツールが使える** — MCP tool-call ブリッジを実装し、Claude 以外のエンジンにも全ツールを配布
+
+### 2. 職人（employee）の認可・スコープ制御
+
+- 👤 **発言者 identity の全ツール伝播** — 「いま誰が話しているか」を全 MCP 職人へ header/env で伝播し、職人側の per-user 認可・per-user 永続化を可能に
+- 🧠 **per-user knowledge スコープ** — ユーザーごとの knowledge 自動分離と、スコープ付き knowledge MCP サーバ
+- 🕶️ **チャネル限定職人（channel-scoped employees）** — `channels:` を書くだけで、その職人は指定チャネル以外では**存在ごと見えなくなる**（組織ロスター・@ルーティング・委譲 API・org API すべてで強制）。`hidden:` でロスター完全非表示も可
+- 🔐 **MCP サーバの職人限定配布** — `mcp.custom.<name>.employees` で特定職人だけにツールを配る（既定ペルソナのツール一覧にも載らない）
+- 🗣️ **名前で呼べるルーティング** — 「◯◯係、これやって」と文頭で呼びかけるだけで該当職人に直接ルーティング
+
+### 3. ガードレール／プラグイン運用（組織運用向けセキュリティ）
+
+- 🛡️ **ガードレール hook** — ターン単位の permission／approval／audit をプラグインで差し込める（サンプルポリシーパック付き）
+- 🧩 **プラグイン管理 UI** — エンジン・コネクタ・MCP サーバを Web UI から登録（インストールは admin gate + 供給元検証付き）
+- 📝 **MCP サーバ登録フォーム** — secret は常にマスク・据置更新（画面にもログにも出さない）
+- ♻️ **WebUI からの自己再起動**（admin 限定）
+
+### 4. Slack 体験の磨き込み
+
+- 🔘 **action hooks** — Block Kit ボタンのハンドラ登録と進捗リアクション
+- 📋 **Markdown テーブルの等幅整形** — Slack にテーブル記法が無い問題を、``` ブロックへの自動整形で解決
+- 📡 **チャネル別 respondTo** — チャネルごとに always／mention／never を上書き、bot 発言の許可チャネル指定も
+- 📎 **添付・共有リンクの取り回し改善** — 非画像添付の URL 提示、元ファイル名の維持、素の URL での共有案内
+
+### 5. 付随的な整備
+
+**WhatsApp を optional plugin 化**してコア配布を MIT クリーンに（GPL の baileys を optional peer dep 化）、**番頭ペルソナ＋「ご記帳」オンボーディング**、`~/.ryoko`／`~/.jinn` → **`~/.openbanto`** へのリブランド（自動マイグレーション付き）、信頼性修正多数（routing／vision／OSS hygiene）。
 
 ## 🌸 上流から継承している強み（OpenRyoko / Jinn 由来）
 
