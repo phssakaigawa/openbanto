@@ -163,9 +163,28 @@ export function extractMention(
   text: string,
   registry: Map<string, Employee>,
 ): Employee | undefined {
+  // Explicit @slug or @displayName anywhere in the text.
   for (const [name, employee] of registry) {
     if (text.includes(`@${name}`)) {
       return employee;
+    }
+    if (employee.displayName && text.includes(`@${employee.displayName}`)) {
+      return employee;
+    }
+  }
+
+  // Addressing by name at the start of the message (natural Japanese style:
+  // 「k8s受入係、〜して」). Strip leading connector mention tokens (<@U123>)
+  // first. Require a separator right after the name so possessive phrasing
+  // like 「k8s受入係の使い方は？」 stays with the default persona.
+  const lead = text.replace(/^\s*(?:<@[^>]+>\s*)+/, "").trimStart();
+  for (const [name, employee] of registry) {
+    for (const label of [employee.displayName, name]) {
+      if (!label || !lead.startsWith(label)) continue;
+      const rest = lead.slice(label.length);
+      if (rest === "" || /^[\s、。，,．.:：！!？?]/.test(rest)) {
+        return employee;
+      }
     }
   }
   return undefined;
