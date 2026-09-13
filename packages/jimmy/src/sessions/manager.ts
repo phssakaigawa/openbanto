@@ -39,6 +39,7 @@ import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
 import { checkBudget } from "../gateway/budgets.js";
 import { resolveMcpServers, writeMcpConfigFile, cleanupMcpConfigFile } from "../mcp/resolver.js";
+import { employeeUsableInChannel } from "../shared/employee-access.js";
 
 export interface RouteOptions {
   employee?: Employee;
@@ -229,7 +230,13 @@ export class SessionManager {
       const registry = scanOrg();
       if (registry.size === 0) return undefined;
       const mentioned = extractMention(msg.text || "", registry);
-      if (mentioned) return mentioned;
+      if (mentioned) {
+        if (!employeeUsableInChannel(mentioned, msg.channel)) {
+          logger.debug(`[route] 職人 "${mentioned.name}" is channel-scoped and not available in ${msg.channel}; ignoring mention`);
+          return undefined;
+        }
+        return mentioned;
+      }
       const hasImage = (msg.attachments || []).some(
         (a) => typeof a.mimeType === "string" && a.mimeType.toLowerCase().startsWith("image/"),
       );
@@ -237,6 +244,10 @@ export class SessionManager {
         const key = this.config.sessions?.imageEmployee;
         if (key) {
           const emp = registry.get(key);
+          if (emp && !employeeUsableInChannel(emp, msg.channel)) {
+            logger.debug(`[route] vision 職人 "${emp.name}" is channel-scoped and not available in ${msg.channel}`);
+            return undefined;
+          }
           if (emp) return emp;
           logger.warn(`[route] sessions.imageEmployee "${key}" not found in org directory`);
         }
@@ -249,6 +260,16 @@ export class SessionManager {
 
   async route(msg: IncomingMessage, connector: Connector, opts: RouteOptions = {}): Promise<{ sessionId: string } | void> {
     if (await this.handleCommand(msg, connector)) return;
+
+    // Channel-scoped employee guard (covers connector-bound employees and cron,
+    // which reach route() with opts.employee already set). Outside its channels
+    // the employee is stripped and the message falls back to the default engine.
+    if (opts.employee && !employeeUsableInChannel(opts.employee, msg.channel)) {
+      logger.warn(
+        `[route] 職人 "${opts.employee.name}" is channel-scoped (not available in ${msg.channel || "no-channel"}); falling back to default engine`,
+      );
+      opts = { ...opts, employee: undefined };
+    }
 
     let session = getSessionBySessionKey(msg.sessionKey);
     // Per-message 職人/engine routing (NEW sessions only — a session's engine is

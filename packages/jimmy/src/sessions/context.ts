@@ -7,6 +7,7 @@ import { scanOrg } from "../gateway/org.js";
 import { buildServiceRegistry } from "../gateway/services.js";
 import { findJobsNeedingAttention } from "../jobs/state.js";
 import { resolveEngineConfig } from "../engines/registry.js";
+import { employeeVisibleInChannel } from "../shared/employee-access.js";
 
 /**
  * Token budget strategy:
@@ -176,7 +177,7 @@ export function buildContext(opts: {
     sections.push({
       tier: Tier.ESSENTIAL,
       marker: "# You are",
-      content: buildIdentity(portalName, operatorName, language, opts.speakerName, speakerIsOperator, hasNativeFs),
+      content: buildIdentity(portalName, operatorName, language, opts.speakerName, speakerIsOperator, hasNativeFs, opts.source),
       summary: `# You are ${portalName}\nYour working directory is \`~/.openbanto\` (${JINN_HOME}).`,
     });
   }
@@ -229,7 +230,7 @@ export function buildContext(opts: {
   }
 
   // ── STANDARD: Organization ──────────────────────────────────
-  const orgCtx = buildOrgContext(opts.hierarchy);
+  const orgCtx = buildOrgContext(opts.hierarchy, opts.channel);
   if (orgCtx) {
     sections.push({
       tier: Tier.STANDARD,
@@ -467,7 +468,16 @@ function buildIdentity(
   speakerName?: string,
   speakerIsOperator = false,
   hasNativeFs = true,
+  source?: string,
 ): string {
+  // Describe the venue by the connector actually in use, so the 番頭 never
+  // calls a Rocket.Chat/Discord/Telegram room a "Slack workspace".
+  const platformLabel =
+    source === "slack" ? "Slack workspace"
+    : source === "rocketchat" ? "Rocket.Chat workspace"
+    : source === "discord" ? "Discord server"
+    : source === "telegram" ? "Telegram chat"
+    : "chat workspace";
   const operatorLine = operatorName
     ? speakerIsOperator || !speakerName
       ? `\nYour operator (the person who runs this Jinn instance) is **${operatorName}**. Address them by name when appropriate.`
@@ -480,11 +490,11 @@ function buildIdentity(
 
   return `# You are ${portalName}
 
-${portalName} — whose name means *banto* (番頭), the head clerk of a traditional Japanese inn (旅館) — is the front-of-house steward of this team's Slack workspace. You greet people warmly, read the room, take requests at the counter, and see them through. For heavy or multi-step work you delegate to your back-of-house engine and come back with the finished result. You are proactive, capable, and quietly hospitable — a trusted colleague, not a passive tool.${operatorLine}
+${portalName} — whose name means *banto* (番頭), the head clerk of a traditional Japanese inn (旅館) — is the front-of-house steward of this team's ${platformLabel}. You greet people warmly, read the room, take requests at the counter, and see them through. For heavy or multi-step work you delegate to your back-of-house engine and come back with the finished result. You are proactive, capable, and quietly hospitable — a trusted colleague, not a passive tool.${operatorLine}
 
 ## Core principles
 - **Play the part — a light ryokan touch**: Open with a brief, warm welcome the way an inn's 番頭 would (a small "おもてなし"), but never overdo it. Once the request is clear, get practical and concise.
-- **Use names as given**: Address people by the exact name or handle they present (e.g. their Slack display name). Never guess, translate, or convert a name into kanji or another script — if the handle is "sakaigawa", say "sakaigawa さん", not a made-up kanji. Ask for their preferred name during ご記帳 if you want a nicer form.
+- **Use names as given**: Address people by the exact name or handle they present (e.g. their chat display name). Never guess, translate, or convert a name into kanji or another script — if the handle is "sakaigawa", say "sakaigawa さん", not a made-up kanji. Ask for their preferred name during ご記帳 if you want a nicer form.
 - **Delegate the heavy lifting**: You run the front desk. Hand deep research, multi-step jobs, and real execution to your engine, then bring back and report the result — don't try to do everything inline yourself.
 - **Be proactive**: Don't just answer questions — suggest next steps, flag issues, offer to do related tasks.
 - **Be concise**: Respect the user's time. Lead with the answer, not the reasoning.
@@ -591,15 +601,20 @@ function buildConfigContext(config: JinnConfig, gatewayUrl: string): string {
   return lines.join("\n");
 }
 
-function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy): string | null {
+function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy, channel?: string): string | null {
   try {
     if (hierarchy && Object.keys(hierarchy.nodes).length > 0) {
       const MAX_DEPTH = 3;
-      const count = Object.keys(hierarchy.nodes).length;
-      const lines: string[] = [`## Organization (${count} employee(s))`];
+      // Channel-scoped / hidden employees are removed from the roster entirely
+      // so their existence does not leak outside their channels.
+      const visible = hierarchy.sorted.filter((name) =>
+        employeeVisibleInChannel(hierarchy.nodes[name].employee, channel),
+      );
+      if (visible.length === 0) return null;
+      const lines: string[] = [`## Organization (${visible.length} employee(s))`];
 
       let deepCount = 0;
-      for (const name of hierarchy.sorted) {
+      for (const name of visible) {
         const node = hierarchy.nodes[name];
         if (node.depth >= MAX_DEPTH) {
           deepCount++;
@@ -619,6 +634,9 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy):
       }
 
       lines.push(`\nYou can create new employees by writing YAML files to \`${ORG_DIR}/\``);
+      lines.push(
+        `\nWhen the operator asks who is available (e.g. 「職人は？」「誰がいる？」「一覧」「自己紹介」), list the registered employees above by their displayName. Also make clear that domains without a dedicated employee are still fully handled by you via the available MCP tools (道具) — distinguish 職人(employee) from 道具(tool) so the roster is never mistaken for the full set of capabilities.`,
+      );
       return lines.join("\n");
     }
 
@@ -644,9 +662,12 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy):
     scanDir(ORG_DIR);
     if (employeeFiles.length === 0) return null;
 
-    const lines: string[] = [`## Organization (${employeeFiles.length} employee(s))`];
+    const entries: string[] = [];
     for (const { fullPath, name } of employeeFiles) {
       const content = fs.readFileSync(fullPath, "utf-8");
+      // Conservative: any channel-scoped or hidden employee is omitted from the
+      // fallback roster (we cannot evaluate the channel list in this path).
+      if (/^hidden:\s*true\b/m.test(content) || /^channels:\s*/m.test(content)) continue;
       const displayMatch = content.match(/displayName:\s*(.+)/);
       const deptMatch = content.match(/department:\s*(.+)/);
       const rankMatch = content.match(/rank:\s*(.+)/);
@@ -655,8 +676,10 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy):
       if (personaMatch?.[1]) {
         entry += `\n  _${personaMatch[1].trim().slice(0, 120)}_`;
       }
-      lines.push(entry);
+      entries.push(entry);
     }
+    if (entries.length === 0) return null;
+    const lines: string[] = [`## Organization (${entries.length} employee(s))`, ...entries];
     lines.push(`\nYou can create new employees by writing YAML files to \`${ORG_DIR}/\``);
     return lines.join("\n");
   } catch {
@@ -755,10 +778,10 @@ function buildProcessLifetimeContext(oneShot: boolean, sessionId?: string): stri
   const sid = sessionId || "<SESSION_ID from Current session>";
   const jobRunner = [
     `- For a job that must outlive the turn, use the self-waking job runner — FIRST choice, do not hand-roll detach + polling:`,
-    `  \`ryoko job run --name <job> --session ${sid} -- '<command>'\``,
+    `  \`banto job run --name <job> --session ${sid} -- '<command>'\``,
     `  It detaches the job (survives turn end, engine kills and gateway restarts), logs to \`~/.openbanto/jobs/logs/\`, and when the job exits — success OR failure — it wakes THIS session with the exit code and the log tail. Add \`--timeout <sec>\` to bound runaway jobs (you still get woken).`,
     `- When a job notification wakes you: finish the deferred work (assemble, upload, …) and reply to the ORIGINAL conversation — it is still waiting on you. On failure, recover or tell the user; never leave the thread silent.`,
-    `- Only if \`ryoko job run\` is unavailable, fall back to manual detach (\`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\` on Linux; \`nohup … &\` + \`disown\` on macOS which has no \`setsid\`) or a cron job (gateway \`/api/cron\`). With manual detach you will NOT be woken when it finishes — you must arrange the follow-up yourself.`,
+    `- Only if \`banto job run\` is unavailable, fall back to manual detach (\`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\` on Linux; \`nohup … &\` + \`disown\` on macOS which has no \`setsid\`) or a cron job (gateway \`/api/cron\`). With manual detach you will NOT be woken when it finishes — you must arrange the follow-up yourself.`,
     `- Verify BEFORE reporting done: read the logfile and check the expected artifact (uploaded file, build output, etc.). If the logfile is missing or incomplete, say so — never claim completion you have not verified.`,
   ];
 

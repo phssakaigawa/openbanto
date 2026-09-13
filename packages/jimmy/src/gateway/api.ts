@@ -77,6 +77,8 @@ import {
   type McpUpsertRequest,
 } from "./plugins-api.js";
 import { armSelfRestart, isRestarting } from "./self-restart.js";
+import { employeeUsableInChannel } from "../shared/employee-access.js";
+import { scanOrg as scanOrgForGuard } from "./org.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
@@ -874,6 +876,24 @@ export async function handleApiRequest(
       if (!_parsed.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
+
+      // Channel-scoped employee guard: delegation is only allowed from a
+      // conversation in one of the employee's channels (derived from the
+      // parent session). Web/stub sessions have no channel and are rejected.
+      if (body.employee) {
+        try {
+          const empDef = scanOrgForGuard().get(String(body.employee));
+          if (empDef && !employeeUsableInChannel(empDef, (() => {
+            const parent = body.parentSessionId ? getSession(String(body.parentSessionId)) : null;
+            const ch = parent?.replyContext && typeof parent.replyContext === "object"
+              ? (parent.replyContext as Record<string, unknown>)["channel"]
+              : undefined;
+            return typeof ch === "string" ? ch : undefined;
+          })())) {
+            return json(res, { error: `employee "${body.employee}" is not available in this conversation` }, 403);
+          }
+        } catch { /* org scan failure: fall through (employee resolution fails later anyway) */ }
+      }
       const greeting = body.greeting || "Hey! Say hi when you're ready to get started.";
       const config = context.getConfig();
       const engineName = body.engine || config.engines.default;
@@ -902,6 +922,24 @@ export async function handleApiRequest(
       const body = _parsed.body as any;
       const prompt = body.prompt || body.message;
       if (!prompt) return badRequest(res, "prompt or message is required");
+
+      // Channel-scoped employee guard: delegation is only allowed from a
+      // conversation in one of the employee's channels (derived from the
+      // parent session). Web/stub sessions have no channel and are rejected.
+      if (body.employee) {
+        try {
+          const empDef = scanOrgForGuard().get(String(body.employee));
+          if (empDef && !employeeUsableInChannel(empDef, (() => {
+            const parent = body.parentSessionId ? getSession(String(body.parentSessionId)) : null;
+            const ch = parent?.replyContext && typeof parent.replyContext === "object"
+              ? (parent.replyContext as Record<string, unknown>)["channel"]
+              : undefined;
+            return typeof ch === "string" ? ch : undefined;
+          })())) {
+            return json(res, { error: `employee "${body.employee}" is not available in this conversation` }, 403);
+          }
+        } catch { /* org scan failure: fall through (employee resolution fails later anyway) */ }
+      }
       const config = context.getConfig();
       const engineName = body.engine || config.engines.default;
       const sessionKey = `web:${Date.now()}`;

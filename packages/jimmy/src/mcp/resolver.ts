@@ -45,7 +45,7 @@ export function resolveMcpServers(
   if (!globalMcp) return { mcpServers: servers };
 
   // Build the full set of available MCP servers from global config
-  const available = buildAvailableServers(globalMcp, sessionContext);
+  const available = buildAvailableServers(globalMcp, sessionContext, employee);
 
   // Determine which servers this employee gets
   const employeeMcp = employee?.mcp;
@@ -75,7 +75,7 @@ export function resolveMcpServers(
 /**
  * Build the map of all available (enabled) MCP servers from global config.
  */
-function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSessionContext): Record<string, McpServerConfig> {
+function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSessionContext, employee?: Employee): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
   // Browser automation via Playwright
@@ -173,7 +173,14 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
   if (config.custom) {
     for (const [name, serverConfig] of Object.entries(config.custom)) {
       if (serverConfig.enabled === false) continue;
-      const { enabled, ...rest } = serverConfig;
+      const { enabled, employees, ...rest } = serverConfig;
+
+      // Employee-scoped custom server: only the named employees receive it.
+      // The default (no-employee) persona never sees its tools, so the
+      // server's existence does not leak into the main banto's tool list.
+      if (Array.isArray(employees) && employees.length > 0 && !(employee && employees.includes(employee.name))) {
+        continue;
+      }
 
       // URL-based MCP server (HTTP/SSE transport)
       // Claude Code requires "type": "sse" for URL-based servers

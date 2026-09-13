@@ -246,6 +246,16 @@ export interface Employee {
   sshHost?: string;
   /** Working directory on the remote host (only used together with sshHost). */
   remoteCwd?: string;
+  /**
+   * If set, this employee is usable and visible ONLY for conversations in
+   * these connector channel IDs (e.g. Slack channel IDs). Everywhere else the
+   * employee is excluded from the org roster context, cannot be @-routed, and
+   * delegation to it is rejected. Contexts with no channel (cron, web UI
+   * sessions without a parent) count as "not in the list".
+   */
+  channels?: string[];
+  /** Exclude from the org roster context everywhere (stealth employee). */
+  hidden?: boolean;
 }
 
 /** A service that an employee can provide to other employees/departments. */
@@ -342,8 +352,12 @@ export interface McpGlobalConfig {
   knowledge?: {
     enabled: boolean;
   };
-  /** Custom MCP servers defined by the user */
-  custom?: Record<string, (McpServerStdioConfig | McpServerUrlConfig) & { enabled?: boolean }>;
+  /**
+   * Custom MCP servers defined by the user.
+   * `employees`: if set, ONLY the named employees receive this server — the
+   * default (no-employee) persona and other employees never see its tools.
+   */
+  custom?: Record<string, (McpServerStdioConfig | McpServerUrlConfig) & { enabled?: boolean; employees?: string[] }>;
 }
 
 export interface WebConnectorConfig {}

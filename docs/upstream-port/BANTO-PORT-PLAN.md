@@ -197,6 +197,8 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 | 職人コントラクト doc（新規） | `docs/design/shokunin-contract.md` | env/header 一覧・全職人 per-user 必須・knowledge を参照実装・HTTP 職人は `X-Banto-User-Id` |
 | 単体テスト（新規/追記） | `mcp/__tests__/resolver.test.ts` 追記 / `mcp/__tests__/knowledge-server-user-scope.test.ts`（新規） | ①stdio env に `JINN_USER_*` 注入・url headers に `X-Banto-*` 注入＋`Authorization` 保持 ②identity 無しは注入しない ③`JINN_USER_KEY` 時 `users/<key>/` 自動スコープ・`shared/` 共通・トラバーサル依然拒否 |
 
+| チャネル限定職人（新規） | `shared/employee-access.ts`（新規）＋ `shared/types.ts`（`Employee.channels`/`hidden`・`mcp.custom[].employees`）＋ `sessions/context.ts`（`buildOrgContext(hierarchy, channel)` フィルタ＋fallback は channels/hidden 持ち yaml をskip）＋ `sessions/manager.ts`（`resolveMessageEmployee` の @mention/vision フィルタ＋`route()` 冒頭の中央ガード）＋ `gateway/api.ts`（`POST /api/sessions`・`/stub` の 403 ガード）＋ `mcp/resolver.ts`（`buildAvailableServers` custom ループで `employees` allowlist を評価し `employees` キーを剥がす） | **★存在秘匿の要**: `channels` 設定職人は指定チャネル以外で「組織ロスターから消え・@ルート不可・委譲403・cron不可(チャネル無し=不可)」。`mcp.custom.<name>.employees` 設定サーバは main 番頭のツール一覧に**載らない**。空配列 `channels: []` は未設定同義（サイレント封鎖より開放デグレ）。テスト=`shared/__tests__/employee-access.test.ts`・`mcp/__tests__/resolver-employee-scope.test.ts` |
+
 ---
 
 ## 上流マージ時のチェックリスト（デグレ防止）
@@ -215,6 +217,7 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 6g. **★per-user knowledge scoping が生きているか**（`sessions/context.ts` `userKey()` が `speakerSlackId`優先→`speakerName`正規化→空は `unknown` のままか。`buildEvolutionContext` の **`isNew` が per-user `users/<userKey>/profile.md` 50字未満**で判定され、グローバル一本に退行していないか。旧 `knowledge/*.md` を **非破壊**で shared 併読し operator を再オンボしないか。組込み **`knowledge` MCP サーバ**が `mcp/resolver.ts` で **既定 ON**（`config.knowledge?.enabled!==false`）・dist の `knowledge-server.js` を解決し、`read/write/list_knowledge` が **`~/.openbanto/knowledge/` にスコープ**され `..`/絶対/`~`/root外シンボリックリンクを拒否・**内部絶対パス非漏洩**か。`McpGlobalConfig.knowledge?` が `types.ts` に残るか）
 6h. **★番頭ID伝播 ＋ 職人 per-user 強制が生きているか**（`mcp/resolver.ts` `McpSessionContext` に `userId`/`userKey`/`userName` が残り、`buildAvailableServers` 末尾の `injectIdentity` が **全職人**に stdio→`JINN_USER_*` env / url→`X-Banto-*` headers を注入し、**url の静的 `Authorization` 等を保持**・**identity 無しは注入しない**か。`sessions/manager.ts` が **2箇所**の `resolveMcpServers` に `speakerIdentity`（`userKey` は `context.ts` 導出再利用）を渡すか。`mcp/knowledge-server.ts` が `JINN_USER_KEY` 時 **`users/<key>/` 既定**・`shared/` 逃げ道・未設定は従来 root 相対で、**`scopePath`→`resolveWithinRoot` の順でトラバーサル拒否**（root 脱出不可・内部絶対パス非漏洩）を維持するか。`docs/design/shokunin-contract.md` が残るか）
 7. **ビルド**: baileys 不在で `cd packages/jimmy && tsc --noEmit` が **0 エラー**（コア MIT クリーンの証明）
+6i. **★チャネル限定職人が生きているか**（`shared/employee-access.ts` が残り、`context.ts` の org ロスターが `buildOrgContext(hierarchy, channel)` でフィルタされているか。`manager.ts` `route()` 冒頭の employee ストリップ＋`resolveMessageEmployee` のフィルタ。`api.ts` `POST /api/sessions`/`/stub` の 403。`resolver.ts` custom ループの `employees` allowlist と `employees` キー剥がし。`channels` 設定職人が他チャネルで見えず・使えず、`mcp.custom[].employees` 設定サーバが main 番頭に配られないこと）
 8. **実機**: Slack で `@番頭` に bob が応答（ログの `Bob engine starting:` の bin が **claude に化けていない**こと）
 
 ## 上流を取り込む手順（推奨）
