@@ -33,7 +33,7 @@ describe("buildContext — process lifetime section", () => {
   it("presents the self-waking job runner as first choice, with the real session id", () => {
     const ctx = buildContext({ ...baseOpts, sessionId: "sess-abc-123" });
     expect(ctx).toContain("self-waking job runner — FIRST choice");
-    expect(ctx).toContain("ryoko job run --name <job> --session sess-abc-123 -- '<command>'");
+    expect(ctx).toContain("banto job run --name <job> --session sess-abc-123 -- '<command>'");
     expect(ctx).toContain("success OR failure — it wakes THIS session");
   });
 
@@ -45,7 +45,7 @@ describe("buildContext — process lifetime section", () => {
 
   it("keeps manual detach only as fallback, with OS-specific commands and no-wake warning", () => {
     const ctx = buildContext(baseOpts);
-    expect(ctx).toContain("Only if `ryoko job run` is unavailable");
+    expect(ctx).toContain("Only if `banto job run` is unavailable");
     expect(ctx).toContain("setsid nohup");
     expect(ctx).toMatch(/macOS/);
     expect(ctx).toMatch(/disown/);

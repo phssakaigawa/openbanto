@@ -6,10 +6,10 @@ import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 program
-  .name("ryoko")
+  .name("banto")
   .description("OpenBanto — Slackで空気を読んで働くAIゲートウェイ")
   .version(pkg.version)
-  .option("-i, --instance <name>", "特定のインスタンスを対象にする（デフォルト: ryoko）");
+  .option("-i, --instance <name>", "特定のインスタンスを対象にする（デフォルト: banto）");
 
 // 任意のコマンド実行前に、指定インスタンスのホームディレクトリを環境変数に反映
 program.hook("preAction", (thisCommand) => {
@@ -93,7 +93,7 @@ program
 program
   .command("update")
   .description("OpenBanto CLIを最新版に更新し、インスタンス移行を適用する")
-  .option("--no-migrate", "CLI更新後の ryoko migrate --auto をスキップする")
+  .option("--no-migrate", "CLI更新後の banto migrate --auto をスキップする")
   .option("--restart", "更新後にゲートウェイを再起動する（systemd → デーモンの順に検出）")
   .option("--service <name>", "再起動する systemd ユニット名（既定: openbanto / 環境変数 OPENBANTO_SERVICE（旧 RYOKO_SERVICE 可））")
   .action(async (opts) => {
@@ -111,7 +111,7 @@ program
     await runMigrate(opts);
   });
 
-// Skillsサブコマンド（ryoko skills find|add|remove|list|update|restore）
+// Skillsサブコマンド（banto skills find|add|remove|list|update|restore）
 {
   const skillsCmd = program
     .command("skills")
@@ -166,7 +166,7 @@ program
     });
 }
 
-// Configサブコマンド（ryoko config interactive [on|off]）
+// Configサブコマンド（banto config interactive [on|off]）
 {
   const configCmd = program
     .command("config")
@@ -181,7 +181,7 @@ program
     });
 }
 
-// 切り離しジョブ（ryoko job run / list — 完了時にセッションを自動起床）
+// 切り離しジョブ（banto job run / list — 完了時にセッションを自動起床）
 {
   const jobCmd = program
     .command("job")

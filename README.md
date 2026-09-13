@@ -308,7 +308,7 @@ VPS等で 24/7 稼働させたい場合、`scripts/systemd/` に systemd unit �
 # 1. 専用ユーザーを作成（rootで動かさない）
 sudo useradd -m -s /bin/bash openbanto
 
-# 2. その ryoko ユーザーで Node 22+ と OpenBanto をインストール
+# 2. その openbanto ユーザーで Node 22+ と OpenBanto をインストール
 sudo -u openbanto -i bash -lc '
   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
   source ~/.nvm/nvm.sh

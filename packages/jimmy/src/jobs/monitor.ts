@@ -4,7 +4,7 @@ import { isPidAlive, jobStatePath, readJobState, writeJobState, type JobState } 
 import { buildJobNotification, readLogTail, sendJobNotification, type NotifyDeps } from "./notify.js";
 
 /**
- * Detached job monitor — the process `ryoko job run` spawns into its own
+ * Detached job monitor — the process `banto job run` spawns into its own
  * process group (survives the engine turn ending and gateway restarts).
  *
  * It runs the job command, streams output to the logfile, and when the job

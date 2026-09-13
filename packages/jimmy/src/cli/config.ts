@@ -9,7 +9,7 @@ const ON_VALUES = new Set(["on", "true", "yes", "1", "enable", "enabled"]);
 const OFF_VALUES = new Set(["off", "false", "no", "0", "disable", "disabled"]);
 
 /**
- * `ryoko config interactive [value]`
+ * `banto config interactive [value]`
  *  - no value → print the current setting
  *  - on|off (and synonyms) → set engines.claude.interactive and persist
  */
@@ -41,7 +41,7 @@ export async function runConfigInteractive(value?: string): Promise<void> {
 
   if (changed) {
     console.log(`${GREEN}interactive を ${enabled ? "on" : "off"} に設定しました。${RESET}`);
-    console.log(`${DIM}ゲートウェイ再起動で反映: ryoko stop && ryoko start（または ryoko update --restart）${RESET}`);
+    console.log(`${DIM}ゲートウェイ再起動で反映: banto stop && banto start（または banto update --restart）${RESET}`);
   } else {
     console.log(`${DIM}interactive は既に ${enabled ? "on" : "off"} です。${RESET}`);
   }

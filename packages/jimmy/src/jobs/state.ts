@@ -10,7 +10,7 @@ import { JOBS_DIR } from "../shared/paths.js";
  *   running → exited → notified          (happy path)
  *                    → notify_failed     (gateway unreachable after retries)
  *
- * The file is written by `ryoko job run` (creation) and the detached monitor
+ * The file is written by `banto job run` (creation) and the detached monitor
  * process (every later transition). The gateway only READS these files (the
  * context builder surfaces finished-but-unnotified jobs on the next turn), so
  * a job can never be lost silently even if its wake-up notification failed.

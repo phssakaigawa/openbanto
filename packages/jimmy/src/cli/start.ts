@@ -11,7 +11,7 @@ const RESET = "\x1b[0m";
 export async function runStart(opts: { daemon?: boolean; port?: number }): Promise<void> {
   if (!fs.existsSync(JINN_HOME)) {
     console.error(
-      `エラー: ${JINN_HOME} が存在しません。まず "ryoko setup" を実行してください。`
+      `エラー: ${JINN_HOME} が存在しません。まず "banto setup" を実行してください。`
     );
     process.exit(1);
   }
@@ -23,7 +23,7 @@ export async function runStart(opts: { daemon?: boolean; port?: number }): Promi
   const pkgVersion = getPackageVersion();
   if (compareSemver(instanceVersion, pkgVersion) < 0) {
     console.log(
-      `${YELLOW}[migrate]${RESET} インスタンスは v${instanceVersion}、CLIは v${pkgVersion} です。${DIM}ryoko migrate${RESET} で更新してください。`
+      `${YELLOW}[migrate]${RESET} インスタンスは v${instanceVersion}、CLIは v${pkgVersion} です。${DIM}banto migrate${RESET} で更新してください。`
     );
   }
 

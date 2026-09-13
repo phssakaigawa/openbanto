@@ -407,14 +407,14 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   // Each file is created once on first init; never overwritten on later runs.
   //
   // BOOTSTRAP.md is the one-time first-run ritual file. The agent deletes it
-  // after onboarding completes, and `ryoko setup` must NOT recreate it on
+  // after onboarding completes, and `banto setup` must NOT recreate it on
   // subsequent runs. We treat "no persona files present" as the trigger to
   // place BOOTSTRAP.md — this covers BOTH:
-  //   1. Brand-new workspaces (first `ryoko setup` ever)
+  //   1. Brand-new workspaces (first `banto setup` ever)
   //   2. Existing pre-persona-layer workspaces upgrading from older OpenBanto
   // Both cases legitimately need onboarding to populate IDENTITY/SOUL/MEMORY.
   // After the agent deletes BOOTSTRAP.md, persona files exist, so future
-  // `ryoko setup` runs skip BOOTSTRAP creation.
+  // `banto setup` runs skip BOOTSTRAP creation.
   const personaFiles = ["IDENTITY.md", "SOUL.md", "MEMORY.md", "TOOLS.md"];
   const needsBootstrap = personaFiles.every((f) => !fs.existsSync(path.join(JINN_HOME, f)));
 
@@ -559,5 +559,5 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     /* best-effort — never block setup on the optional prompt */
   }
 
-  console.log(`\n${GREEN}セットアップ完了。${RESET} ${DIM}ryoko start${RESET} でゲートウェイを起動できます。\n`);
+  console.log(`\n${GREEN}セットアップ完了。${RESET} ${DIM}banto start${RESET} でゲートウェイを起動できます。\n`);
 }

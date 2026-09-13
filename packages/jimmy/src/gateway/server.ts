@@ -656,8 +656,8 @@ export async function startGateway(
    *
    * This is what makes "save Slack tokens in WebUI → bot reconnects" work
    * without a daemon restart. Previously only instance-based connectors
-   * were reloaded, so editing top-level slack tokens required `ryoko stop`
-   * + `ryoko start`.
+   * were reloaded, so editing top-level slack tokens required `banto stop`
+   * + `banto start`.
    */
   async function doReloadOnce(): Promise<{ started: string[]; stopped: string[]; errors: string[] }> {
     const fresh = loadConfig();
@@ -1048,7 +1048,7 @@ export async function startGateway(
           return;
         }
 
-        // External edits to ~/.openbanto/config.yaml (vim, ryoko CLI, etc.) need
+        // External edits to ~/.openbanto/config.yaml (vim, banto CLI, etc.) need
         // a connector refresh when either:
         //   (a) the connectors block changed, OR
         //   (b) portal.portalName/operatorName changed — Slack connectors
@@ -1113,7 +1113,7 @@ export async function startGateway(
         const msg = `Port ${port} is already in use.`;
         logger.error(msg);
         console.error(`\nError: ${msg}`);
-        console.error(`\nTry: ryoko start -p ${port + 1}`);
+        console.error(`\nTry: banto start -p ${port + 1}`);
         console.error(`Or update the port in config.yaml\n`);
         process.exit(1);
       }

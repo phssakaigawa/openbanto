@@ -9,7 +9,7 @@
   },
   "bin": {
     "openbanto": "./dist/bin/jimmy.js",
-    "ryoko": "./dist/bin/jimmy.js"
+    "banto": "./dist/bin/jimmy.js"
   },
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

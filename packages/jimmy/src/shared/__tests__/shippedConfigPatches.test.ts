@@ -6,7 +6,7 @@ import { parseConfigPatch } from "../configPatch.js";
 
 /**
  * Guardrail: every `config-patch.json` we ship must parse and validate. A
- * malformed shipped patch would be silently skipped at `ryoko migrate --auto`
+ * malformed shipped patch would be silently skipped at `banto migrate --auto`
  * time (the version still stamps), so the config evolution would be lost with
  * no retry. Catch it here at build/test time instead.
  */

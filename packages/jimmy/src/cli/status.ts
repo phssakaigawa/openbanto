@@ -5,7 +5,7 @@ import fs from "node:fs";
 
 export async function runStatus(): Promise<void> {
   if (!fs.existsSync(JINN_HOME)) {
-    console.log("ゲートウェイはセットアップされていません。まず \"ryoko setup\" を実行してください。");
+    console.log("ゲートウェイはセットアップされていません。まず \"banto setup\" を実行してください。");
     return;
   }
 

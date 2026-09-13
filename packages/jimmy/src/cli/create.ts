@@ -22,7 +22,7 @@ export async function runCreate(name: string, port?: number): Promise<void> {
   }
 
   if (name === "jinn") {
-    console.error(`${RED}エラー:${RESET} "jinn" はデフォルトインスタンス名です。代わりに "ryoko setup" を使用してください。`);
+    console.error(`${RED}エラー:${RESET} "jinn" はデフォルトインスタンス名です。代わりに "banto setup" を使用してください。`);
     process.exit(1);
   }
 
@@ -81,6 +81,6 @@ export async function runCreate(name: string, port?: number): Promise<void> {
   console.log(`\n${GREEN}インスタンス "${name}" を作成しました。${RESET}`);
   console.log(`  ホーム: ${DIM}${home}${RESET}`);
   console.log(`  ポート: ${DIM}${assignedPort}${RESET}`);
-  console.log(`\n起動: ${DIM}ryoko -i ${name} start${RESET}`);
-  console.log(`または: ${DIM}ryoko -i ${name} start --daemon${RESET}\n`);
+  console.log(`\n起動: ${DIM}banto -i ${name} start${RESET}`);
+  console.log(`または: ${DIM}banto -i ${name} start --daemon${RESET}\n`);
 }
