@@ -1228,7 +1228,16 @@ export async function handleApiRequest(
       const { scanOrg } = await import("./org.js");
       const { resolveOrgHierarchy } = await import("./org-hierarchy.js");
       const orgRegistry = scanOrg();
-      const hierarchy = resolveOrgHierarchy(orgRegistry);
+
+      // Channel-scoped / hidden employees are omitted unless the caller
+      // supplies ?channel=<id> that matches (the gateway MCP passes the
+      // current conversation channel). Safe default: an LLM hitting this
+      // endpoint without a channel never learns restricted employees exist.
+      const channelParam = url.searchParams.get("channel") || undefined;
+      const filteredRegistry = new Map(
+        [...orgRegistry].filter(([, e]) => employeeUsableInChannel(e, channelParam) && !e.hidden),
+      );
+      const hierarchy = resolveOrgHierarchy(filteredRegistry);
 
       const employees = hierarchy.sorted.map((name) => {
         const node = hierarchy.nodes[name];
@@ -1262,6 +1271,10 @@ export async function handleApiRequest(
       const orgRegistry = scanOrg();
       const emp = orgRegistry.get(params.name);
       if (!emp) return notFound(res);
+
+      // Restricted employees look like 404 unless the caller's channel matches.
+      const empChannelParam = url.searchParams.get("channel") || undefined;
+      if (emp.hidden || !employeeUsableInChannel(emp, empChannelParam)) return notFound(res);
 
       const hierarchy = resolveOrgHierarchy(orgRegistry);
       const node = hierarchy.nodes[params.name];

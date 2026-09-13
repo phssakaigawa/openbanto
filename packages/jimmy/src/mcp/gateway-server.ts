@@ -185,6 +185,50 @@ const TOOLS = [
       required: ["jobId"],
     },
   },
+  {
+    name: "create_cron_job",
+    description:
+      "Create a new scheduled cron job. The job runs `prompt` on its schedule; to deliver the result to a chat, set `deliveryConnector`+`deliveryChannel` (e.g. a Slack DM) — the output is posted there automatically, so the prompt must NOT embed curl/HTTP calls to send messages. For a recurring reminder (e.g. 10 minutes before events), schedule a frequent poll like every 5 minutes and let the prompt decide whether anything is due.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Human-readable job name (unique)" },
+        schedule: {
+          type: "string",
+          description: "Cron expression, e.g. '0 8 * * *' for every day at 08:00",
+        },
+        prompt: { type: "string", description: "Prompt the job runs on each fire" },
+        timezone: {
+          type: "string",
+          description: "IANA timezone for the schedule, e.g. 'Asia/Tokyo'. Defaults to server tz.",
+        },
+        enabled: { type: "boolean", description: "Whether the job is active. Default true." },
+        engine: { type: "string", description: "Engine override (claude/codex/gemini)" },
+        model: { type: "string", description: "Model override" },
+        employee: { type: "string", description: "Employee slug to run the job as" },
+        deliveryConnector: {
+          type: "string",
+          description: "Connector to deliver the result through, e.g. 'slack'",
+        },
+        deliveryChannel: {
+          type: "string",
+          description: "Channel/DM id to deliver the result to, e.g. a Slack DM channel id",
+        },
+      },
+      required: ["name", "schedule", "prompt"],
+    },
+  },
+  {
+    name: "delete_cron_job",
+    description: "Delete a cron job permanently.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        jobId: { type: "string", description: "Cron job ID or name" },
+      },
+      required: ["jobId"],
+    },
+  },
 ];
 
 // ─── API Helpers ───
@@ -214,6 +258,12 @@ async function apiPut(path: string, body: unknown): Promise<unknown> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(`API ${path}: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function apiDelete(path: string): Promise<unknown> {
+  const res = await fetch(`${GATEWAY_URL}${path}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API ${path}: ${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -279,12 +329,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case "list_employees": {
-      const org = await apiGet("/api/org") as any;
+      // Scope the roster to the current conversation channel so channel-scoped
+      // employees never leak into other channels' tool results.
+      const ch = process.env.JINN_CURRENT_CHANNEL;
+      const org = await apiGet(`/api/org${ch ? `?channel=${encodeURIComponent(ch)}` : ""}`) as any;
       return JSON.stringify(org);
     }
 
     case "get_employee": {
-      const employee = await apiGet(`/api/org/employees/${args.name}`);
+      const ch = process.env.JINN_CURRENT_CHANNEL;
+      const employee = await apiGet(`/api/org/employees/${args.name}${ch ? `?channel=${encodeURIComponent(ch)}` : ""}`);
       return JSON.stringify(employee);
     }
 
@@ -319,6 +373,34 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         ...(args.schedule ? { schedule: args.schedule } : {}),
         ...(args.prompt ? { prompt: args.prompt } : {}),
       });
+      return JSON.stringify(result);
+    }
+
+    case "create_cron_job": {
+      const delivery =
+        args.deliveryConnector && args.deliveryChannel
+          ? { connector: args.deliveryConnector as string, channel: args.deliveryChannel as string }
+          : undefined;
+      const result = await apiPost("/api/cron", {
+        name: args.name,
+        schedule: args.schedule,
+        prompt: args.prompt,
+        ...(args.timezone ? { timezone: args.timezone } : {}),
+        ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
+        ...(args.engine ? { engine: args.engine } : {}),
+        ...(args.model ? { model: args.model } : {}),
+        ...(args.employee ? { employee: args.employee } : {}),
+        ...(delivery ? { delivery } : {}),
+      });
+      return JSON.stringify(result);
+    }
+
+    case "delete_cron_job": {
+      // Resolve name → id (DELETE route matches by id only).
+      const jobs = await apiGet("/api/cron") as any[];
+      const job = jobs.find((j: any) => j.id === args.jobId || j.name === args.jobId);
+      if (!job) return JSON.stringify({ error: `Job "${args.jobId}" not found` });
+      const result = await apiDelete(`/api/cron/${job.id}`);
       return JSON.stringify(result);
     }
 
