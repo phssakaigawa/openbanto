@@ -622,12 +622,14 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy, 
         }
         const emp = node.employee;
         const indent = "  ".repeat(node.depth);
-        let entry = `${indent}- **${emp.displayName}** (${name}) — ${emp.department}, ${emp.rank}`;
-        if (emp.channels && emp.channels.length > 0) {
-          // Only rendered inside an allowed channel (filtered above). Tell the
-          // LLM the scope explicitly so it can relay it when listing the roster.
-          entry += `（このチャンネル限定 / channel-scoped）`;
-        }
+        // Channel-scoped employees carry the label inside the display name
+        // itself — the LLM reliably copies the name token into its roster
+        // answer, whereas a separate annotation gets dropped in reformatting.
+        const shownName =
+          emp.channels && emp.channels.length > 0
+            ? `${emp.displayName}（このチャンネル限定）`
+            : emp.displayName;
+        let entry = `${indent}- **${shownName}** (${name}) — ${emp.department}, ${emp.rank}`;
         if (emp.persona) {
           const firstLine = emp.persona.trim().split("\n")[0].trim().slice(0, 120);
           entry += `\n${indent}  _${firstLine}_`;
