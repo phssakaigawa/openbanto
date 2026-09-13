@@ -221,6 +221,7 @@ function identityEnv(ctx?: McpSessionContext): Record<string, string> {
   if (ctx.userName) env.JINN_USER_NAME = ctx.userName;
   if (ctx.connector) env.JINN_CONNECTOR = ctx.connector;
   if (ctx.channel) env.JINN_CHANNEL = ctx.channel;
+  if (ctx.thread) env.JINN_THREAD = ctx.thread;
   return env;
 }
 
@@ -233,6 +234,7 @@ function identityHeaders(ctx?: McpSessionContext): Record<string, string> {
   if (ctx.userName) headers["X-Banto-User-Name"] = ctx.userName;
   if (ctx.connector) headers["X-Banto-Connector"] = ctx.connector;
   if (ctx.channel) headers["X-Banto-Channel"] = ctx.channel;
+  if (ctx.thread) headers["X-Banto-Thread"] = ctx.thread;
   return headers;
 }
 
