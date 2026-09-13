@@ -256,8 +256,8 @@ export class OpenAiEngine implements InterruptibleEngine {
 
     if (!res.ok || !res.body) {
       const errText = await this.safeReadError(res);
-      const msg = `${this.name} HTTP ${res.status}${errText ? `: ${errText.slice(0, 500)}` : ""}`;
-      logger.error(`[${this.name}] ${msg}`);
+      logger.error(`[${this.name}] HTTP ${res.status}${errText ? `: ${errText.slice(0, 500)}` : ""}`);
+      const msg = this.friendlyError(res.status, errText);
       return { sessionId: sid, result: "", error: msg };
     }
 
@@ -332,8 +332,8 @@ export class OpenAiEngine implements InterruptibleEngine {
       });
       if (!res.ok) {
         const errText = await this.safeReadError(res);
-        const msg = `${this.name} HTTP ${res.status}${errText ? `: ${errText.slice(0, 500)}` : ""}`;
-        logger.error(`[${this.name}] ${msg}`);
+        logger.error(`[${this.name}] HTTP ${res.status}${errText ? `: ${errText.slice(0, 500)}` : ""}`);
+        const msg = this.friendlyError(res.status, errText);
         return { sessionId: sid, result: "", error: msg };
       }
       const completion = (await res.json()) as ChatCompletion;
@@ -418,6 +418,34 @@ export class OpenAiEngine implements InterruptibleEngine {
     } catch {
       return res.statusText || "";
     }
+  }
+
+  /**
+   * Turn an upstream error into an actionable message. Context-length 400s
+   * (input exceeds the model's window) become a user-friendly note instead of
+   * a raw provider error (#509). Other errors keep the raw "<name> HTTP <status>: …".
+   */
+  private friendlyError(status: number, errText: string): string {
+    const t = errText || "";
+    const isCtx =
+      status === 400 &&
+      /context length|context window|maximum context|input_tokens|too many tokens|reduce the length/i.test(
+        t,
+      );
+    if (isCtx) {
+      const maxM = t.match(/maximum context length is\s+(\d+)/i);
+      const gotM =
+        t.match(/contains at least\s+(\d+)/i) || t.match(/(\d+)\s+input tokens/i);
+      const max = maxM ? maxM[1] : null;
+      const got = gotM ? gotM[1] : null;
+      let m = "⚠️ 入力が長すぎます。";
+      if (max && got)
+        m += `このモデルのコンテキスト上限 ${max} トークンに対し、入力が約 ${got} トークンあります。`;
+      else if (max) m += `このモデルのコンテキスト上限は ${max} トークンです。`;
+      m += "依頼や対象データを小さく分割するか、範囲を絞って再度お試しください。";
+      return m;
+    }
+    return `${this.name} HTTP ${status}${errText ? `: ${errText.slice(0, 500)}` : ""}`;
   }
 }
 
