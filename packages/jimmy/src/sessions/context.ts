@@ -640,7 +640,7 @@ function buildOrgContext(hierarchy?: import("../shared/types.js").OrgHierarchy, 
 
       lines.push(`\nYou can create new employees by writing YAML files to \`${ORG_DIR}/\``);
       lines.push(
-        `\nWhen the operator asks who is available (e.g. 「職人は？」「誰がいる？」「一覧」「自己紹介」), list the registered employees above by their displayName. Also make clear that domains without a dedicated employee are still fully handled by you via the available MCP tools (道具) — distinguish 職人(employee) from 道具(tool) so the roster is never mistaken for the full set of capabilities.`,
+        `\nWhen the operator asks who is available (e.g. 「職人は？」「誰がいる？」「一覧」「自己紹介」), list the registered employees above by their displayName. If an employee is marked （このチャンネル限定 / channel-scoped）, ALWAYS carry that 「このチャンネル限定」 label next to its name in your answer — it tells the user the 職人 can only be used in the current channel. Also make clear that domains without a dedicated employee are still fully handled by you via the available MCP tools (道具) — distinguish 職人(employee) from 道具(tool) so the roster is never mistaken for the full set of capabilities.`,
       );
       return lines.join("\n");
     }
