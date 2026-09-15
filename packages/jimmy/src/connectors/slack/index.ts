@@ -540,10 +540,12 @@ export class SlackConnector implements Connector {
             // reach the engine instead of failing with "parse URL from undefined".
             let urlPrivate: string | undefined = file.url_private;
             let mimeType: string | undefined = file.mimetype;
+            let fileName: string | undefined = file.name;
             if (!urlPrivate && file.id) {
               const info = await this.app.client.files.info({ file: file.id });
               urlPrivate = (info.file as any)?.url_private;
               mimeType = mimeType || (info.file as any)?.mimetype;
+              fileName = fileName || (info.file as any)?.name || (info.file as any)?.title;
             }
             if (!urlPrivate) {
               logger.warn(`[slack] attachment ${file.id ?? file.name} has no url_private (file_access=${file.file_access}); skipping`);
@@ -555,7 +557,7 @@ export class SlackConnector implements Connector {
               TMP_DIR,
             );
             attachments.push({
-              name: file.name,
+              name: fileName ?? "attachment",
               url: urlPrivate,
               mimeType: mimeType ?? "",
               localPath,
