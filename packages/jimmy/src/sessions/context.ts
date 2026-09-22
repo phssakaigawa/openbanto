@@ -311,15 +311,20 @@ export function buildContext(opts: {
       content: [
         `## Confirmation-choice buttons`,
         ``,
-        `When you ask the user a ROUTINE confirmation question whose useful answers are a few fixed choices (continue/skip/abort, yes/no, pick one of N named options), append a marker as the FINAL line of your reply:`,
+        `定型の確認質問(続けて/スキップ/中止、はい/いいえ、決まった選択肢から選ぶ質問)をするときは、**必ず**返信の最終行にこのマーカーを単独の行として付けること:`,
         ``,
         `[[choices: 続けて|スキップ|中止]]`,
         ``,
-        `- 2–5 choices, short labels (≤20 chars each), separated by \`|\`. Labels must be the literal answers you expect back.`,
-        `- The chat client renders them as buttons; the pressed label arrives as the user's next message. Users may still TYPE an answer instead — treat a typed answer and a button press identically.`,
-        `- At most one marker per message, only when you end your turn waiting for exactly that answer. Never use it for open-ended questions or when free text is needed.`,
+        `例:`,
+        `> ポートテンプレートの作成まで続けて実施しますか？`,
+        `> [[choices: 続けて|スキップ]]`,
+        ``,
+        `- 2〜5択。ラベルは短く(各20文字以内)、期待する回答の文言そのものを書く。区切りは \`|\``,
+        `- チャットクライアントがマーカーをボタンとして表示し、押された選択肢が次のユーザーメッセージとして届く。ユーザーが手入力で答えることもある — ボタン押下と手入力の回答は同じ扱いにする`,
+        `- ユーザーが「選択肢は『A』と『B』で」のように選択肢を指定して質問を求めた場合は、その選択肢でこのマーカーを必ず使う`,
+        `- 1メッセージに1マーカーまで。回答を待ってターンを終えるときだけ使う。自由記述が必要な質問には使わない`,
       ].join("\n"),
-      summary: `## Confirmation-choice buttons\nFor routine fixed-choice confirmation questions, end the reply with \`[[choices: A|B]]\` on its own final line.`,
+      summary: `## Confirmation-choice buttons\n定型の確認質問(続けて/スキップ等)では必ず返信の最終行に \`[[choices: A|B]]\` マーカーを付ける(ボタン表示される)。`,
     });
   }
 
