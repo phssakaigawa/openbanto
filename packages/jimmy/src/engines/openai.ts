@@ -386,6 +386,59 @@ export class OpenAiEngine implements InterruptibleEngine {
       // Loop again with the tool results appended.
     }
 
+    if (!finalText && !ac.signal.aborted) {
+      // The tool loop ended without a final prose answer — either
+      // MAX_TOOL_ROUNDS was exhausted mid-workflow or the model returned empty
+      // content on its last turn (observed with DeepSeek-V4 on vLLM after a
+      // burst of tool calls). An empty result propagates to the caller as
+      // "(no output)" and reads as "nothing happened" even though the tools
+      // DID run and had side effects — so ask once more, with tool use
+      // disabled, to force a closing report. The nudge is a `user` turn on
+      // purpose: the same models return empty content again when the
+      // transcript ends with a `system` message.
+      logger.warn(`[${this.name}] tool loop ended without final text — requesting a tool-less summary round`);
+      messages.push({
+        role: "user",
+        content:
+          "(system note) Tools are no longer available for this turn. Write the final report for the requester " +
+          "based on the tool calls above and their results: what was done, key results, and anything unfinished. " +
+          "Reply in the same language as the original request. Do not print tool-call JSON.",
+      });
+      try {
+        const body: Record<string, unknown> = {
+          model: opts.model || this.model,
+          stream: false,
+          messages,
+          tools,
+          tool_choice: "none",
+        };
+        if (typeof this.temperature === "number") body.temperature = this.temperature;
+        const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          signal: ac.signal,
+          headers: this.requestHeaders(),
+          body: JSON.stringify(body),
+        });
+        if (res.ok) {
+          const completion = (await res.json()) as ChatCompletion;
+          if (completion.usage) usage = completion.usage;
+          finalText = completion.choices?.[0]?.message?.content ?? "";
+          if (finalText) onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
+        } else {
+          const errText = await this.safeReadError(res);
+          logger.error(`[${this.name}] summary round HTTP ${res.status}${errText ? `: ${errText.slice(0, 300)}` : ""}`);
+        }
+      } catch (e: unknown) {
+        if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
+        logger.warn(`[${this.name}] summary round failed: ${e instanceof Error ? e.message : e}`);
+      }
+      if (!finalText) {
+        // Last resort: never end a tool-running turn with an empty success —
+        // downstream treats "" as "no work happened" and drops the message.
+        finalText = "（ツールの実行は完了しましたが、モデルから最終まとめの応答を取得できませんでした。実行内容は各ツールの結果をご確認ください。）";
+      }
+    }
+
     // Persist the user turn + final assistant text for a later resume.
     history.push({ role: "user", content: userContent });
     history.push({ role: "assistant", content: finalText });

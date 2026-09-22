@@ -237,6 +237,122 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     expect(result.result).toBe("hello");
   });
 
+  it("requests a tool-less summary round when the loop ends with empty final text", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "create_thing", inputSchema: { type: "object" } }],
+      { create_thing: { content: [{ type: "text", text: "created id=234" }] } },
+    );
+
+    // Round 1: tool call. Round 2: EMPTY final content (DeepSeek-after-tool-burst
+    // shape). Round 3 (summary round, tool_choice "none"): the real report.
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  { id: "call_1", type: "function", function: { name: "srv__create_thing", arguments: "{}" } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }),
+        { status: 200 },
+      ),
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "Created thing id=234." } }],
+          usage: { prompt_tokens: 50 },
+        }),
+        { status: 200 },
+      ),
+    ];
+    const sentBodies: any[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        sentBodies.push(JSON.parse(init.body as string));
+        return responses[call++];
+      }),
+    );
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "create the thing",
+      cwd: "/tmp",
+      sessionId: "t-summary",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // The summary round disables tool use and ends with a `user` nudge —
+    // a trailing `system` message makes some models return empty content again.
+    expect(sentBodies).toHaveLength(3);
+    expect(sentBodies[2].tool_choice).toBe("none");
+    const lastMsg = sentBodies[2].messages[sentBodies[2].messages.length - 1];
+    expect(lastMsg.role).toBe("user");
+    // The turn never ends with an empty success once tools have run.
+    expect(result.error).toBeUndefined();
+    expect(result.result).toBe("Created thing id=234.");
+  });
+
+  it("returns a non-empty fallback when even the summary round yields no text", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "t", inputSchema: { type: "object" } }],
+      { t: { content: [{ type: "text", text: "x" }] } },
+    );
+    // Round 1: tool call. Round 2: empty. Round 3 (summary): empty again.
+    const empty = () =>
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 });
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "srv__t", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      empty(),
+      empty(),
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]));
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "do it",
+      cwd: "/tmp",
+      sessionId: "t-fallback",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.result.length).toBeGreaterThan(0);
+  });
+
   it("kill() aborts the in-flight request AND closes the MCP client", async () => {
     const client = new FakeMcpClient(
       [{ name: "t", inputSchema: { type: "object" } }],
