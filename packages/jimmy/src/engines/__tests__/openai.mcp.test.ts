@@ -353,6 +353,100 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     expect(result.result.length).toBeGreaterThan(0);
   });
 
+  it("fails the turn honestly when no tools ran and no final text came back (no fabricated summary)", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "t", inputSchema: { type: "object" } }],
+      { t: { content: [{ type: "text", text: "x" }] } },
+    );
+    // Round 1: no tool_calls AND empty content → loop breaks with nothing done.
+    const responses: Response[] = [
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 }),
+    ];
+    let call = 0;
+    const fetchMock = vi.fn(async () => responses[call++]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "do the workflow",
+      cwd: "/tmp",
+      sessionId: "t-notools",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // No summary round is issued — the model has nothing real to summarize and
+    // would only fabricate a success report.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.error).toBeDefined();
+    expect(result.result.length).toBeGreaterThan(0);
+    expect(client.callLog).toHaveLength(0);
+  });
+
+  it("anchors the summary round to the execution record and errors when every call failed", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "upload", inputSchema: { type: "object" } }],
+      { upload: { content: [{ type: "text", text: "boom" }], isError: true } },
+    );
+    // Round 1: tool call (fails). Round 2: empty content → summary round.
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "srv__upload", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 }),
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "アップロードは失敗しました。" } }] }),
+        { status: 200 },
+      ),
+    ];
+    const sentBodies: any[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        sentBodies.push(JSON.parse(init.body as string));
+        return responses[call++];
+      }),
+    );
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "upload the file",
+      cwd: "/tmp",
+      sessionId: "t-allfailed",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // Summary nudge carries the authoritative execution record with the failure.
+    const lastMsg = sentBodies[2].messages[sentBodies[2].messages.length - 1];
+    expect(lastMsg.role).toBe("user");
+    expect(lastMsg.content).toContain("AUTHORITATIVE");
+    expect(lastMsg.content).toContain("srv__upload: FAILED");
+    // A turn where every tool call failed never surfaces as a success.
+    expect(result.error).toBe("all 1 tool call(s) failed");
+    expect(result.result).toBe("アップロードは失敗しました。");
+  });
+
   it("kill() aborts the in-flight request AND closes the MCP client", async () => {
     const client = new FakeMcpClient(
       [{ name: "t", inputSchema: { type: "object" } }],
