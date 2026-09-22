@@ -956,6 +956,11 @@ export async function handleApiRequest(
         effortLevel: body.effortLevel,
         prompt,
         portalName: config.portal?.portalName,
+        // Optional speaker identity (speakerName/speakerSlackId/…) so an API
+        // client can create a session on behalf of a known guest — the prompt
+        // builder and MCP identity propagation read it just like a connector
+        // session's meta.
+        transportMeta: body.transportMeta,
       });
       logger.info(`Web session created: ${session.id}`);
       insertMessage(session.id, "user", prompt);
@@ -2704,12 +2709,47 @@ async function runWebSession(
   // finally-cleanup below can always reach it.
   let mcpConfigPath: string | undefined;
 
+  // Speaker identity for this web session. Normally lives on the session's
+  // own transportMeta (API clients may pass it at creation); an employee
+  // handoff session is a connector-less web session whose ORIGIN speaker
+  // lives on the parent (Slack) session — walk up the chain so both the
+  // system prompt (呼び方 / per-user 宿帳 scoping) and the MCP identity
+  // propagation see the real person instead of an anonymous web identity.
+  let speakerMeta = (currentSession.transportMeta || {}) as Record<string, unknown>;
+  let originContext = (currentSession.replyContext || {}) as Record<string, unknown>;
+  let originConnector = currentSession.connector || "web";
+  if (!speakerMeta.speakerSlackId && !speakerMeta.speakerName) {
+    let pid = currentSession.parentSessionId;
+    for (let hop = 0; hop < 5 && pid; hop++) {
+      const parent = getSession(pid);
+      if (!parent) break;
+      const pMeta = (parent.transportMeta || {}) as Record<string, unknown>;
+      if (pMeta.speakerSlackId || pMeta.speakerName) {
+        speakerMeta = pMeta;
+        originContext = (parent.replyContext || {}) as Record<string, unknown>;
+        originConnector = parent.connector || originConnector;
+        break;
+      }
+      pid = parent.parentSessionId;
+    }
+  }
+  const speakerStr = (key: string): string | undefined => {
+    const v = speakerMeta[key];
+    return typeof v === "string" && v ? v : undefined;
+  };
+
   try {
 
     const systemPrompt = buildContext({
       source: "web",
       channel: currentSession.sourceRef,
-      user: "web-user",
+      user: speakerStr("speakerName") || "web-user",
+      speakerName: speakerStr("speakerName"),
+      speakerRealName: speakerStr("speakerRealName"),
+      speakerDisplayName: speakerStr("speakerDisplayName"),
+      speakerHandle: speakerStr("speakerHandle"),
+      speakerSlackId: speakerStr("speakerSlackId"),
+      speakerTz: speakerStr("speakerTz"),
       employee,
       connectors: Array.from(context.connectors.keys()),
       config,
@@ -2734,29 +2774,11 @@ async function runWebSession(
     // in a single tool-less round-trip. Mirror the manager here.
     try {
       const { resolveMcpServers, writeMcpConfigFile } = await import("../mcp/resolver.js");
-      // Identity propagation: an employee handoff session is a connector-less
-      // web session, but the ORIGIN speaker lives on the parent (Slack)
-      // session. Walk up the parent chain so 職人 MCP servers receive the real
-      // X-Banto-User-Id instead of an anonymous web identity (identity-scoped
-      // connectors reject calls without it).
-      let speakerMeta = (currentSession.transportMeta || {}) as Record<string, unknown>;
-      let originContext = (currentSession.replyContext || {}) as Record<string, unknown>;
-      let originConnector = currentSession.connector || "web";
-      if (!speakerMeta.speakerSlackId && !speakerMeta.speakerName) {
-        let pid = currentSession.parentSessionId;
-        for (let hop = 0; hop < 5 && pid; hop++) {
-          const parent = getSession(pid);
-          if (!parent) break;
-          const pMeta = (parent.transportMeta || {}) as Record<string, unknown>;
-          if (pMeta.speakerSlackId || pMeta.speakerName) {
-            speakerMeta = pMeta;
-            originContext = (parent.replyContext || {}) as Record<string, unknown>;
-            originConnector = parent.connector || originConnector;
-            break;
-          }
-          pid = parent.parentSessionId;
-        }
-      }
+      // Identity propagation: speakerMeta/originContext/originConnector were
+      // resolved above (own transportMeta, falling back to the parent chain)
+      // and shared with the system-prompt builder, so 職人 MCP servers receive
+      // the real X-Banto-User-Id instead of an anonymous web identity
+      // (identity-scoped connectors reject calls without it).
       const mcpConfig = resolveMcpServers(config.mcp, employee, {
         connector: originConnector,
         channel: typeof originContext.channel === "string" ? originContext.channel : currentSession.sourceRef,
