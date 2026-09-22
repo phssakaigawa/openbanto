@@ -299,6 +299,35 @@ export function buildContext(opts: {
     });
   }
 
+  // ── STANDARD: Confirmation-choice buttons (Slack sessions only) ──
+  // Contract with the Slack connector (choice-buttons.ts): a trailing
+  // [[choices: …]] line becomes interactive buttons; the pressed label is
+  // injected back as the user's reply. Only Slack-source sessions get this
+  // instruction, so other connectors never see the marker.
+  if (opts.source === "slack") {
+    sections.push({
+      tier: Tier.STANDARD,
+      marker: "## Confirmation-choice buttons",
+      content: [
+        `## Confirmation-choice buttons`,
+        ``,
+        `定型の確認質問(続けて/スキップ/中止、はい/いいえ、決まった選択肢から選ぶ質問)をするときは、**必ず**返信の最終行にこのマーカーを単独の行として付けること:`,
+        ``,
+        `[[choices: 続けて|スキップ|中止]]`,
+        ``,
+        `例:`,
+        `> ポートテンプレートの作成まで続けて実施しますか？`,
+        `> [[choices: 続けて|スキップ]]`,
+        ``,
+        `- 2〜5択。ラベルは短く(各20文字以内)、期待する回答の文言そのものを書く。区切りは \`|\``,
+        `- チャットクライアントがマーカーをボタンとして表示し、押された選択肢が次のユーザーメッセージとして届く。ユーザーが手入力で答えることもある — ボタン押下と手入力の回答は同じ扱いにする`,
+        `- ユーザーが「選択肢は『A』と『B』で」のように選択肢を指定して質問を求めた場合は、その選択肢でこのマーカーを必ず使う`,
+        `- 1メッセージに1マーカーまで。回答を待ってターンを終えるときだけ使う。自由記述が必要な質問には使わない`,
+      ].join("\n"),
+      summary: `## Confirmation-choice buttons\n定型の確認質問(続けて/スキップ等)では必ず返信の最終行に \`[[choices: A|B]]\` マーカーを付ける(ボタン表示される)。`,
+    });
+  }
+
   // ── STANDARD: Language override for skills ──────────────────
   if (language !== "English") {
     sections.push({
