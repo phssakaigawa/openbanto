@@ -77,6 +77,21 @@ export interface EngineResult {
    * iterate `turns` instead.
    */
   turns?: string[];
+  /**
+   * Mechanical "this turn ended mid-workflow" flag: the engine had to close
+   * the turn itself (tool-round budget or context budget exhausted, or the
+   * closing text came from the summary round / machine-generated execution
+   * report) instead of the model delivering its own completion. The gateway
+   * may run bounded auto-continuation turns (sessions.autoContinueLimit)
+   * before reporting the partial result. Never set together with `error`.
+   */
+  incomplete?: boolean;
+  /**
+   * Authoritative record of the tool calls that actually executed this turn
+   * (in order). Attached to an auto-continuation prompt so a continued turn
+   * does not repeat work that already ran with side effects.
+   */
+  executedToolCalls?: Array<{ name: string; ok: boolean }>;
 }
 
 export interface EngineRateLimitInfo {
@@ -726,6 +741,15 @@ export interface JinnConfig {
      *  Lets a single Slack app send photos to a vision-capable (e.g. claude-backed)
      *  worker while plain text stays on the default engine. Unset → no auto-routing. */
     imageEmployee?: string;
+    /** Max automatic continuation turns when an engine mechanically reports a
+     *  turn ended mid-workflow (EngineResult.incomplete — tool-round/context
+     *  budget exhausted, summary-round closing). Each continuation resumes the
+     *  same engine session with a prompt that carries the executed-tool record
+     *  so finished work is not repeated; intermediate partial reports stay in
+     *  the session log and only the final turn's text is delivered. When the
+     *  limit is reached with the turn still incomplete, the partial report is
+     *  delivered as before. Default: 2. Set 0 to disable. */
+    autoContinueLimit?: number;
     /** Opt-in: also retry the interactive engine's hard-turn timeout
      *  ("Interrupted: interactive turn timed out"). OFF by default because that
      *  turn genuinely occupied the engine (up to interactiveTurnTimeoutMs) — a
