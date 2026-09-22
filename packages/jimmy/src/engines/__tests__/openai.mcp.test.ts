@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { OpenAiEngine } from "../openai.js";
+import { OpenAiEngine, stripToolCallMarkup } from "../openai.js";
 import type { StreamDelta } from "../../shared/types.js";
 import type { McpClientLike, BridgeDeps, McpToolDef, McpCallToolResult } from "../../mcp/tool-bridge.js";
 
@@ -235,6 +235,276 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     expect(sent[0].stream).toBe(true);
     expect(sent[0].tools).toBeUndefined();
     expect(result.result).toBe("hello");
+  });
+
+  it("requests a tool-less summary round when the loop ends with empty final text", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "create_thing", inputSchema: { type: "object" } }],
+      { create_thing: { content: [{ type: "text", text: "created id=234" }] } },
+    );
+
+    // Round 1: tool call. Round 2: EMPTY final content (DeepSeek-after-tool-burst
+    // shape). Round 3 (summary round, tool_choice "none"): the real report.
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  { id: "call_1", type: "function", function: { name: "srv__create_thing", arguments: "{}" } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }),
+        { status: 200 },
+      ),
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "Created thing id=234." } }],
+          usage: { prompt_tokens: 50 },
+        }),
+        { status: 200 },
+      ),
+    ];
+    const sentBodies: any[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        sentBodies.push(JSON.parse(init.body as string));
+        return responses[call++];
+      }),
+    );
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "create the thing",
+      cwd: "/tmp",
+      sessionId: "t-summary",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // The summary round disables tool use and ends with a `user` nudge —
+    // a trailing `system` message makes some models return empty content again.
+    expect(sentBodies).toHaveLength(3);
+    expect(sentBodies[2].tool_choice).toBe("none");
+    const lastMsg = sentBodies[2].messages[sentBodies[2].messages.length - 1];
+    expect(lastMsg.role).toBe("user");
+    // The turn never ends with an empty success once tools have run.
+    expect(result.error).toBeUndefined();
+    expect(result.result).toBe("Created thing id=234.");
+  });
+
+  it("returns a non-empty fallback when even the summary round yields no text", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "t", inputSchema: { type: "object" } }],
+      { t: { content: [{ type: "text", text: "x" }] } },
+    );
+    // Round 1: tool call. Round 2: empty. Round 3 (summary): empty again.
+    const empty = () =>
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 });
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "srv__t", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      empty(),
+      empty(),
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]));
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "do it",
+      cwd: "/tmp",
+      sessionId: "t-fallback",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.result.length).toBeGreaterThan(0);
+  });
+
+  it("fails the turn honestly when no tools ran and no final text came back (no fabricated summary)", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "t", inputSchema: { type: "object" } }],
+      { t: { content: [{ type: "text", text: "x" }] } },
+    );
+    // Round 1: no tool_calls AND empty content → loop breaks with nothing done.
+    const responses: Response[] = [
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 }),
+    ];
+    let call = 0;
+    const fetchMock = vi.fn(async () => responses[call++]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "do the workflow",
+      cwd: "/tmp",
+      sessionId: "t-notools",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // No summary round is issued — the model has nothing real to summarize and
+    // would only fabricate a success report.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.error).toBeDefined();
+    expect(result.result.length).toBeGreaterThan(0);
+    expect(client.callLog).toHaveLength(0);
+  });
+
+  it("anchors the summary round to the execution record and errors when every call failed", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "upload", inputSchema: { type: "object" } }],
+      { upload: { content: [{ type: "text", text: "boom" }], isError: true } },
+    );
+    // Round 1: tool call (fails). Round 2: empty content → summary round.
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "srv__upload", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 }),
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "アップロードは失敗しました。" } }] }),
+        { status: 200 },
+      ),
+    ];
+    const sentBodies: any[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        sentBodies.push(JSON.parse(init.body as string));
+        return responses[call++];
+      }),
+    );
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "upload the file",
+      cwd: "/tmp",
+      sessionId: "t-allfailed",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // Summary nudge carries the authoritative execution record with the failure.
+    const lastMsg = sentBodies[2].messages[sentBodies[2].messages.length - 1];
+    expect(lastMsg.role).toBe("user");
+    expect(lastMsg.content).toContain("AUTHORITATIVE");
+    expect(lastMsg.content).toContain("srv__upload: FAILED");
+    // A turn where every tool call failed never surfaces as a success.
+    expect(result.error).toBe("all 1 tool call(s) failed");
+    expect(result.result).toBe("アップロードは失敗しました。");
+  });
+
+  it("strips raw DSML tool-call markup from the summary round and falls back to the execution report", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "create_folder", inputSchema: { type: "object" } }],
+      { create_folder: { content: [{ type: "text", text: "created" }] } },
+    );
+    // Round 1: tool call (ok). Round 2: empty content → summary round.
+    // Summary round: the model tries to CONTINUE the work — pure DSML markup.
+    const dsml =
+      '\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="srv__create_folder">\n' +
+      '<｜DSML｜parameter name="path" string="true">NetBox/manuals/X</｜DSML｜parameter>\n' +
+      "</｜DSML｜invoke>\n</｜DSML｜tool_calls>";
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "srv__create_folder", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 }),
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: dsml } }] }), { status: 200 }),
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]));
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "make the folder",
+      cwd: "/tmp",
+      sessionId: "t-dsml",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // Raw markup never reaches the caller; the deterministic execution report does.
+    expect(result.result).not.toContain("DSML");
+    expect(result.result).toContain("srv__create_folder: 成功");
+    expect(result.result.length).toBeGreaterThan(0);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("stripToolCallMarkup keeps the prose prefix and drops everything from the first special token", () => {
+    expect(stripToolCallMarkup("フォルダを作成しました。<｜DSML｜tool_calls>...")).toBe("フォルダを作成しました。");
+    expect(stripToolCallMarkup("<｜DSML｜tool_calls>...")).toBe("");
+    expect(stripToolCallMarkup("plain answer with no markup")).toBe("plain answer with no markup");
+    expect(stripToolCallMarkup("ascii variant <|DSML|tool_calls>x")).toBe("ascii variant");
+    expect(stripToolCallMarkup("")).toBe("");
   });
 
   it("kill() aborts the in-flight request AND closes the MCP client", async () => {

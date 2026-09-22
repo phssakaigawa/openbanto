@@ -7,7 +7,7 @@ import yaml from "js-yaml";
 import type { CronJob, Engine, IncomingMessage, JinnConfig, Session, Target } from "../shared/types.js";
 import { isInterruptibleEngine } from "../shared/types.js";
 import type { SessionManager } from "../sessions/manager.js";
-import { buildContext } from "../sessions/context.js";
+import { buildContext, userKey } from "../sessions/context.js";
 import {
   initDb,
   listSessions,
@@ -27,6 +27,7 @@ import {
   cancelAllPendingQueueItems,
   listAllPendingQueueItems,
   getFile,
+  accumulateSessionCost,
 } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "../sessions/origin-delivery.js";
@@ -2699,6 +2700,10 @@ async function runWebSession(
   const { resolveOrgHierarchy } = await import("./org-hierarchy.js");
   const orgHierarchy = resolveOrgHierarchy(scanOrgForHierarchy());
 
+  // Resolved per-turn MCP config path — declared outside the try so the
+  // finally-cleanup below can always reach it.
+  let mcpConfigPath: string | undefined;
+
   try {
 
     const systemPrompt = buildContext({
@@ -2721,11 +2726,61 @@ async function runWebSession(
     });
 
     const engineConfig = resolveEngineConfig(config, currentSession.engine);
+
+    // Web/employee sessions previously ran WITHOUT any MCP tools — the
+    // connector path (sessions/manager.ts) resolves + writes the per-turn MCP
+    // config, but this path never did, so an employee handoff session's
+    // engine (e.g. the OpenAI-compatible engine) had no tools and completed
+    // in a single tool-less round-trip. Mirror the manager here.
+    try {
+      const { resolveMcpServers, writeMcpConfigFile } = await import("../mcp/resolver.js");
+      // Identity propagation: an employee handoff session is a connector-less
+      // web session, but the ORIGIN speaker lives on the parent (Slack)
+      // session. Walk up the parent chain so 職人 MCP servers receive the real
+      // X-Banto-User-Id instead of an anonymous web identity (identity-scoped
+      // connectors reject calls without it).
+      let speakerMeta = (currentSession.transportMeta || {}) as Record<string, unknown>;
+      let originContext = (currentSession.replyContext || {}) as Record<string, unknown>;
+      let originConnector = currentSession.connector || "web";
+      if (!speakerMeta.speakerSlackId && !speakerMeta.speakerName) {
+        let pid = currentSession.parentSessionId;
+        for (let hop = 0; hop < 5 && pid; hop++) {
+          const parent = getSession(pid);
+          if (!parent) break;
+          const pMeta = (parent.transportMeta || {}) as Record<string, unknown>;
+          if (pMeta.speakerSlackId || pMeta.speakerName) {
+            speakerMeta = pMeta;
+            originContext = (parent.replyContext || {}) as Record<string, unknown>;
+            originConnector = parent.connector || originConnector;
+            break;
+          }
+          pid = parent.parentSessionId;
+        }
+      }
+      const mcpConfig = resolveMcpServers(config.mcp, employee, {
+        connector: originConnector,
+        channel: typeof originContext.channel === "string" ? originContext.channel : currentSession.sourceRef,
+        thread: typeof originContext.thread === "string" ? originContext.thread : undefined,
+        userId: typeof speakerMeta.speakerSlackId === "string" ? speakerMeta.speakerSlackId : undefined,
+        userKey: userKey({
+          speakerSlackId: typeof speakerMeta.speakerSlackId === "string" ? speakerMeta.speakerSlackId : undefined,
+          speakerName: typeof speakerMeta.speakerName === "string" ? speakerMeta.speakerName : undefined,
+        }),
+        userName: typeof speakerMeta.speakerName === "string" ? speakerMeta.speakerName : "web-user",
+      });
+      if (Object.keys(mcpConfig.mcpServers).length > 0) {
+        mcpConfigPath = writeMcpConfigFile(mcpConfig, currentSession.id);
+        logger.info(`Web session ${currentSession.id} MCP servers: ${Object.keys(mcpConfig.mcpServers).join(", ")}${employee ? ` (employee: ${employee.name})` : ""}`);
+      }
+    } catch (mcpErr) {
+      logger.warn(`Web session ${currentSession.id} MCP resolution failed (continuing without tools): ${mcpErr instanceof Error ? mcpErr.message : mcpErr}`);
+    }
+
     const effortLevel = resolveEffort(
       engineConfig,
       currentSession,
       employee,
-      effortLevelsForModel(config, currentSession.engine, currentSession.model ?? engineConfig.model),
+      effortLevelsForModel(config, currentSession.engine, currentSession.model ?? employee?.model ?? engineConfig.model),
     );
 
     let lastHeartbeatAt = 0;
@@ -2755,11 +2810,12 @@ async function runWebSession(
       systemPrompt,
       cwd: JINN_HOME,
       bin: engineConfig.bin,
-      model: currentSession.model ?? engineConfig.model,
+      model: currentSession.model ?? employee?.model ?? engineConfig.model,
       effortLevel,
       cliFlags: employee?.cliFlags,
       sshHost: employee?.sshHost,
       remoteCwd: employee?.remoteCwd,
+      mcpConfigPath,
       attachments: attachments?.length ? attachments : undefined,
       sessionId: currentSession.id,
       onStream: (delta) => {
@@ -2869,6 +2925,7 @@ async function runWebSession(
             cliFlags: employee?.cliFlags,
             sshHost: employee?.sshHost,
             remoteCwd: employee?.remoteCwd,
+            mcpConfigPath,
             sessionId: currentSession.id,
             onStream: (delta) => {
               context.emit("session:delta", {
@@ -2895,6 +2952,7 @@ async function runWebSession(
           metaAfter.engineSessions = nextEngineSessions;
           updateSession(currentSession.id, { transportMeta: metaAfter as any });
 
+          accumulateSessionCost(currentSession.id, fallbackResult.cost ?? 0, fallbackResult.numTurns ?? 1);
           const completedFallback = updateSession(currentSession.id, {
             engineSessionId: fallbackResult.sessionId,
             status: fallbackResult.error ? "error" : "idle",
@@ -3001,11 +3059,12 @@ async function runWebSession(
             systemPrompt,
             cwd: JINN_HOME,
             bin: engineConfig.bin,
-            model: current.model ?? engineConfig.model,
+            model: current.model ?? employee?.model ?? engineConfig.model,
             effortLevel,
             cliFlags: employee?.cliFlags,
             sshHost: employee?.sshHost,
             remoteCwd: employee?.remoteCwd,
+            mcpConfigPath,
             sessionId: currentSession.id,
             onStream: (delta) => {
               context.emit("session:delta", {
@@ -3046,6 +3105,7 @@ async function runWebSession(
             insertMessage(currentSession.id, "assistant", retryResult.result);
           }
 
+          accumulateSessionCost(currentSession.id, retryResult.cost ?? 0, retryResult.numTurns ?? 1);
           const completedAfterRetry = updateSession(currentSession.id, {
             ...(retryResult.sessionId?.trim() ? { engineSessionId: retryResult.sessionId } : {}),
             status: retryResult.error ? "error" : "idle",
@@ -3109,6 +3169,11 @@ async function runWebSession(
       insertMessage(currentSession.id, "assistant", result.result);
     }
 
+    // Mirror the connector path's cost/turn accounting — web/employee
+    // sessions previously never accumulated, so /api/costs/by-employee
+    // showed totalTurns=0 for every 職人.
+    accumulateSessionCost(currentSession.id, result.cost ?? 0, result.numTurns ?? 1);
+
     const completedSession = updateSession(currentSession.id, {
       ...(result.sessionId?.trim() ? { engineSessionId: result.sessionId } : {}),
       status: result.error ? "error" : "idle",
@@ -3167,5 +3232,12 @@ async function runWebSession(
       error: errMsg,
     });
     logger.error(`Web session ${currentSession.id} error: ${errMsg}`);
+  } finally {
+    if (mcpConfigPath) {
+      try {
+        const { cleanupMcpConfigFile } = await import("../mcp/resolver.js");
+        cleanupMcpConfigFile(currentSession.id);
+      } catch { /* best-effort cleanup */ }
+    }
   }
 }

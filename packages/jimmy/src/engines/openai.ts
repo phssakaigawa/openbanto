@@ -55,8 +55,43 @@ export interface OpenAiEngineConfig {
 }
 
 /** Upper bound on tool-call rounds so a model that keeps requesting tools can't
- *  loop forever. Each round is one chat.completions call + its tool executions. */
-const MAX_TOOL_ROUNDS = 8;
+ *  loop forever. Each round is one chat.completions call + its tool executions.
+ *  Deliberately generous: real multi-step workflows (device registration +
+ *  folder/manual/template setup) were getting cut off mid-task at 8. The
+ *  per-turn "tool loop finished" INFO log records rounds used, so this can be
+ *  tightened later from observed data. */
+const MAX_TOOL_ROUNDS = 32;
+
+/**
+ * Strip raw tool-call markup from a summary-round answer. The summary round
+ * sends NO tools, so the serving stack's tool-call parser is inactive — when
+ * the model decides mid-task work should continue anyway, its native tool-call
+ * markup (DeepSeek DSML: `<｜DSML｜tool_calls>…`, or other `<｜…｜>` special-token
+ * families) arrives as plain TEXT and would leak verbatim to the user. Cut the
+ * answer at the first such marker and keep only the prose prefix; the caller
+ * falls back to a mechanical execution report when nothing readable remains.
+ */
+export function stripToolCallMarkup(content: string): string {
+  if (!content) return "";
+  // Fullwidth-bar (U+FF5C) special tokens and the ASCII-bar DSML variant.
+  const m = content.search(/<[｜|]|<\/[｜|]/);
+  const cut = m >= 0 ? content.slice(0, m) : content;
+  return cut.trim();
+}
+
+/** Deterministic, model-free closing report built from the per-turn tool
+ *  execution record — the fallback when the model cannot produce usable prose. */
+function buildExecReport(execLog: Array<{ name: string; ok: boolean; ms: number }>): string {
+  const ok = execLog.filter((c) => c.ok).length;
+  const failed = execLog.length - ok;
+  const lines = execLog.slice(-30).map((c) => `- ${c.name}: ${c.ok ? "成功" : "失敗"}`);
+  return (
+    "（モデルから最終まとめの応答を取得できなかったため、実行記録から機械生成した報告です）\n" +
+    `このターンで実行したツール呼び出し: ${ok}件成功 / ${failed}件失敗\n` +
+    lines.join("\n") +
+    "\n※ 上記に無い作業は実行されていません。作業が途中の場合は続きを依頼してください。"
+  );
+}
 
 /** One tool_call as returned by a non-streaming chat.completions response. */
 interface ToolCall {
@@ -311,9 +346,17 @@ export class OpenAiEngine implements InterruptibleEngine {
     const tools = bridge.getOpenAiTools();
     let usage: ChatChunk["usage"] | undefined;
     let finalText = "";
+    // Authoritative per-turn tool execution record: drives the per-call INFO
+    // logs, anchors the summary round to what actually ran (so the model can't
+    // report planned-but-unexecuted work as done), and lets this turn fail
+    // honestly when nothing ran at all. A call is "ok" only when the bridge
+    // neither threw nor returned its `Error:`-prefixed failure string.
+    const execLog: Array<{ name: string; ok: boolean; ms: number }> = [];
+    let roundsUsed = 0;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
+      roundsUsed = round + 1;
 
       const body: Record<string, unknown> = {
         model: opts.model || this.model,
@@ -369,21 +412,130 @@ export class OpenAiEngine implements InterruptibleEngine {
               tool_call_id: call.id,
               content: `Error: could not parse tool arguments as JSON`,
             });
+            execLog.push({ name, ok: false, ms: 0 });
+            logger.info(`[${this.name}] tool ${name} FAILED in 0ms (malformed arguments) (session ${sid})`);
             continue;
           }
         }
 
         let toolResult: string;
+        const calledAt = Date.now();
+        let callThrew = false;
         try {
           toolResult = await bridge.callTool(name, args);
         } catch (e: unknown) {
           const m = e instanceof Error ? e.message : String(e);
           toolResult = `Error: tool "${name}" failed: ${m.slice(0, 300)}`;
+          callThrew = true;
         }
+        const callMs = Date.now() - calledAt;
+        // The bridge reports unknown tools / disconnected servers / MCP isError
+        // results as an `Error:`-prefixed string instead of throwing.
+        const callOk = !callThrew && !toolResult.startsWith("Error:");
+        execLog.push({ name, ok: callOk, ms: callMs });
+        // Include a one-line result preview: an MCP call can be transport-"ok"
+        // while its payload is really a failure message, and the preview is how
+        // that shows up in the log without replaying the turn.
+        const preview = toolResult.replace(/\s+/g, " ").slice(0, 120);
+        logger.info(`[${this.name}] tool ${name} ${callOk ? "ok" : "FAILED"} in ${callMs}ms (${toolResult.length} chars) preview="${preview}" (session ${sid})`);
         onStream?.({ type: "tool_result", content: toolResult, toolName: name, toolId: call.id } satisfies StreamDelta);
         messages.push({ role: "tool", tool_call_id: call.id, content: toolResult });
       }
       // Loop again with the tool results appended.
+    }
+
+    const okCalls = execLog.filter((c) => c.ok).length;
+    const failedCalls = execLog.length - okCalls;
+    // Per-turn round/call accounting — the data source for tuning
+    // MAX_TOOL_ROUNDS from real usage (grep "tool loop finished").
+    logger.info(`[${this.name}] tool loop finished: ${roundsUsed}/${MAX_TOOL_ROUNDS} round(s), ${execLog.length} call(s) (${okCalls} ok / ${failedCalls} failed)${finalText ? "" : ", no final text"} (session ${sid})`);
+
+    let turnError: string | undefined;
+    if (!finalText && !ac.signal.aborted) {
+      // The tool loop ended without a final prose answer — either
+      // MAX_TOOL_ROUNDS was exhausted mid-workflow or the model returned empty
+      // content on its last turn (observed with DeepSeek-V4 on vLLM after a
+      // burst of tool calls). An empty result propagates to the caller as
+      // "(no output)" and reads as "nothing happened" even though the tools
+      // may have run with side effects — so ask once more, with tool use
+      // disabled, to force a closing report. The nudge is a `user` turn on
+      // purpose: the same models return empty content again when the
+      // transcript ends with a `system` message.
+      logger.warn(`[${this.name}] tool loop ended without final text (tool calls: ${okCalls} ok / ${failedCalls} failed) — requesting a tool-less summary round`);
+      if (execLog.length === 0) {
+        // Nothing ran at all. Asking the model to "summarize" an empty turn is
+        // how fabricated success reports are born — it writes up the work it
+        // INTENDED to do as if it had happened. Skip the model and fail the
+        // turn honestly instead.
+        finalText =
+          "（このターンではツールを一度も実行できず、モデルからの最終応答もありませんでした。作業は行われていません。依頼を分割するか、もう一度お試しください。）";
+        turnError = "tool loop produced no output and executed no tool calls";
+      } else {
+        // Anchor the summary to the authoritative execution record so the
+        // model cannot pass off unexecuted work as done.
+        const digest = execLog
+          .slice(-30)
+          .map((c) => `- ${c.name}: ${c.ok ? "ok" : "FAILED"}`)
+          .join("\n");
+        messages.push({
+          role: "user",
+          content:
+            "(system note) Tools are no longer available for this turn. This is the AUTHORITATIVE record of the tool calls that actually executed in this turn:\n" +
+            digest +
+            "\nWrite the final report for the requester STRICTLY from this record and the tool results above. " +
+            "Only actions marked ok actually happened. Anything not in this record — including work you planned or intended — " +
+            "was NOT executed and must be reported as not done. Do not invent file names, IDs, or results. " +
+            "Reply in the same language as the original request. Do not print tool-call JSON.",
+        });
+        try {
+          const body: Record<string, unknown> = {
+            model: opts.model || this.model,
+            stream: false,
+            messages,
+            tools,
+            tool_choice: "none",
+          };
+          if (typeof this.temperature === "number") body.temperature = this.temperature;
+          const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+            method: "POST",
+            signal: ac.signal,
+            headers: this.requestHeaders(),
+            body: JSON.stringify(body),
+          });
+          if (res.ok) {
+            const completion = (await res.json()) as ChatCompletion;
+            if (completion.usage) usage = completion.usage;
+            const rawSummary = completion.choices?.[0]?.message?.content ?? "";
+            finalText = stripToolCallMarkup(rawSummary);
+            if (rawSummary && finalText.length < rawSummary.trim().length) {
+              // The model tried to CONTINUE the work instead of summarizing —
+              // with no tools in the request its native tool-call markup came
+              // back as plain text and must never reach the user.
+              logger.warn(`[${this.name}] summary round emitted raw tool-call markup — stripped ${rawSummary.length - finalText.length} chars`);
+            }
+            if (finalText) onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
+          } else {
+            const errText = await this.safeReadError(res);
+            logger.error(`[${this.name}] summary round HTTP ${res.status}${errText ? `: ${errText.slice(0, 300)}` : ""}`);
+          }
+        } catch (e: unknown) {
+          if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
+          logger.warn(`[${this.name}] summary round failed: ${e instanceof Error ? e.message : e}`);
+        }
+        if (!finalText) {
+          // Last resort: never end a tool-running turn with an empty success —
+          // downstream treats "" as "no work happened" and drops the message.
+          // Model-free by design: at this point the model has already failed
+          // twice to produce prose, so report the execution record verbatim.
+          finalText = buildExecReport(execLog);
+          onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
+        }
+        if (okCalls === 0) {
+          // Every call failed and the model produced no organic final answer —
+          // never let this surface as a successful completion.
+          turnError = `all ${execLog.length} tool call(s) failed`;
+        }
+      }
     }
 
     // Persist the user turn + final assistant text for a later resume.
@@ -396,6 +548,7 @@ export class OpenAiEngine implements InterruptibleEngine {
     return {
       sessionId: sid,
       result: finalText,
+      ...(turnError ? { error: turnError } : {}),
       durationMs: Date.now() - startedAt,
       ...(typeof contextTokens === "number" ? { contextTokens } : {}),
       ...(typeof cost === "number" ? { cost } : {}),
