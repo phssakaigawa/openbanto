@@ -61,6 +61,30 @@ function userKnowledgePath(key: string, file: string): string {
   return path.join(KNOWLEDGE_USERS_DIR, key, file);
 }
 
+/**
+ * Extract the speaker's preferred form of address (the 「呼び方」 field of
+ * their guest-register profile.md). The knowledge listing is filenames-only,
+ * so unless this is injected explicitly the model never sees it and instead
+ * guesses a reading for kanji names — which produced wrong hiragana
+ * honorifics in the wild. Recognizes `呼び方`/`呼び名`/`呼称` as the label,
+ * strips surrounding quote brackets, and returns undefined when no profile
+ * or no such field exists.
+ */
+export function readPreferredAddress(scope: SpeakerScope | undefined): string | undefined {
+  const key = userKey(scope);
+  if (key === "unknown") return undefined;
+  let content = "";
+  try {
+    content = fs.readFileSync(userKnowledgePath(key, "profile.md"), "utf-8");
+  } catch {
+    return undefined;
+  }
+  const m = content.match(/^\s*(?:[-*]\s*)?(?:呼び方|呼び名|呼称)\s*[::]\s*(.+)$/m);
+  if (!m) return undefined;
+  const value = m[1].trim().replace(/^[「『"']+/, "").replace(/[」』"']+$/, "").trim();
+  return value || undefined;
+}
+
 // ── Tier enum for progressive trimming ────────────────────────
 const enum Tier {
   ESSENTIAL = 0,
@@ -567,10 +591,24 @@ function buildSessionContext(opts: {
     ctx += `- Speaker: **${opts.speakerName}**${aliasSuffix}${botSuffix}\n`;
     if (opts.speakerTz) ctx += `  - Timezone: ${opts.speakerTz}\n`;
 
+    // 呼び方 (form of address) from the guest register. Without an explicit
+    // injection the model invents readings for kanji names (romaji handle →
+    // wrong hiragana), so state the exact required form — or the exact
+    // fallback — as a hard rule, right next to the speaker identity.
+    const preferredAddress = readPreferredAddress({
+      speakerSlackId: opts.speakerSlackId,
+      speakerName: opts.speakerName,
+    });
+    if (preferredAddress) {
+      ctx += `  - 呼び方: Address this speaker as **「${preferredAddress}」** — exactly as written in their guest register (宿帳). Never invent a different reading, honorific, or hiragana spelling of their name.\n`;
+    } else {
+      ctx += `  - 呼び方: No preferred form of address is on file. Address them by their display name/handle **as-is**. Never guess the reading of a kanji name or convert it to hiragana.\n`;
+    }
+
     const operator = opts.operatorName?.trim();
     const isOperator = opts.speakerIsOperator === true;
     if (operator && !isOperator) {
-      ctx += `  - ⚠ NOT the operator. Address this person as "${opts.speakerName}", not "${operator}".\n`;
+      ctx += `  - ⚠ NOT the operator. Address this person as "${preferredAddress ?? opts.speakerName}", not "${operator}".\n`;
     } else if (operator && isOperator) {
       ctx += `  - This speaker is the operator.\n`;
     }
