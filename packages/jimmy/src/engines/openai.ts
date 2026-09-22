@@ -55,8 +55,12 @@ export interface OpenAiEngineConfig {
 }
 
 /** Upper bound on tool-call rounds so a model that keeps requesting tools can't
- *  loop forever. Each round is one chat.completions call + its tool executions. */
-const MAX_TOOL_ROUNDS = 8;
+ *  loop forever. Each round is one chat.completions call + its tool executions.
+ *  Deliberately generous: real multi-step workflows (device registration +
+ *  folder/manual/template setup) were getting cut off mid-task at 8. The
+ *  per-turn "tool loop finished" INFO log records rounds used, so this can be
+ *  tightened later from observed data. */
+const MAX_TOOL_ROUNDS = 32;
 
 /**
  * Strip raw tool-call markup from a summary-round answer. The summary round
@@ -348,9 +352,11 @@ export class OpenAiEngine implements InterruptibleEngine {
     // honestly when nothing ran at all. A call is "ok" only when the bridge
     // neither threw nor returned its `Error:`-prefixed failure string.
     const execLog: Array<{ name: string; ok: boolean; ms: number }> = [];
+    let roundsUsed = 0;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
+      roundsUsed = round + 1;
 
       const body: Record<string, unknown> = {
         model: opts.model || this.model,
@@ -438,6 +444,12 @@ export class OpenAiEngine implements InterruptibleEngine {
       // Loop again with the tool results appended.
     }
 
+    const okCalls = execLog.filter((c) => c.ok).length;
+    const failedCalls = execLog.length - okCalls;
+    // Per-turn round/call accounting — the data source for tuning
+    // MAX_TOOL_ROUNDS from real usage (grep "tool loop finished").
+    logger.info(`[${this.name}] tool loop finished: ${roundsUsed}/${MAX_TOOL_ROUNDS} round(s), ${execLog.length} call(s) (${okCalls} ok / ${failedCalls} failed)${finalText ? "" : ", no final text"} (session ${sid})`);
+
     let turnError: string | undefined;
     if (!finalText && !ac.signal.aborted) {
       // The tool loop ended without a final prose answer — either
@@ -449,8 +461,6 @@ export class OpenAiEngine implements InterruptibleEngine {
       // disabled, to force a closing report. The nudge is a `user` turn on
       // purpose: the same models return empty content again when the
       // transcript ends with a `system` message.
-      const okCalls = execLog.filter((c) => c.ok).length;
-      const failedCalls = execLog.length - okCalls;
       logger.warn(`[${this.name}] tool loop ended without final text (tool calls: ${okCalls} ok / ${failedCalls} failed) — requesting a tool-less summary round`);
       if (execLog.length === 0) {
         // Nothing ran at all. Asking the model to "summarize" an empty turn is
