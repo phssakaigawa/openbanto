@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { OpenAiEngine } from "../openai.js";
+import { OpenAiEngine, stripToolCallMarkup } from "../openai.js";
 import type { StreamDelta } from "../../shared/types.js";
 import type { McpClientLike, BridgeDeps, McpToolDef, McpCallToolResult } from "../../mcp/tool-bridge.js";
 
@@ -445,6 +445,66 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     // A turn where every tool call failed never surfaces as a success.
     expect(result.error).toBe("all 1 tool call(s) failed");
     expect(result.result).toBe("アップロードは失敗しました。");
+  });
+
+  it("strips raw DSML tool-call markup from the summary round and falls back to the execution report", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "create_folder", inputSchema: { type: "object" } }],
+      { create_folder: { content: [{ type: "text", text: "created" }] } },
+    );
+    // Round 1: tool call (ok). Round 2: empty content → summary round.
+    // Summary round: the model tries to CONTINUE the work — pure DSML markup.
+    const dsml =
+      '\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="srv__create_folder">\n' +
+      '<｜DSML｜parameter name="path" string="true">NetBox/manuals/X</｜DSML｜parameter>\n' +
+      "</｜DSML｜invoke>\n</｜DSML｜tool_calls>";
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "srv__create_folder", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "" } }] }), { status: 200 }),
+      new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: dsml } }] }), { status: 200 }),
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]));
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "make the folder",
+      cwd: "/tmp",
+      sessionId: "t-dsml",
+      mcpConfigPath: writeConfig({ srv: { command: "srv" } }),
+    });
+
+    // Raw markup never reaches the caller; the deterministic execution report does.
+    expect(result.result).not.toContain("DSML");
+    expect(result.result).toContain("srv__create_folder: 成功");
+    expect(result.result.length).toBeGreaterThan(0);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("stripToolCallMarkup keeps the prose prefix and drops everything from the first special token", () => {
+    expect(stripToolCallMarkup("フォルダを作成しました。<｜DSML｜tool_calls>...")).toBe("フォルダを作成しました。");
+    expect(stripToolCallMarkup("<｜DSML｜tool_calls>...")).toBe("");
+    expect(stripToolCallMarkup("plain answer with no markup")).toBe("plain answer with no markup");
+    expect(stripToolCallMarkup("ascii variant <|DSML|tool_calls>x")).toBe("ascii variant");
+    expect(stripToolCallMarkup("")).toBe("");
   });
 
   it("kill() aborts the in-flight request AND closes the MCP client", async () => {

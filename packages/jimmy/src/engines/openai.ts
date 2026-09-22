@@ -58,6 +58,37 @@ export interface OpenAiEngineConfig {
  *  loop forever. Each round is one chat.completions call + its tool executions. */
 const MAX_TOOL_ROUNDS = 8;
 
+/**
+ * Strip raw tool-call markup from a summary-round answer. The summary round
+ * sends NO tools, so the serving stack's tool-call parser is inactive — when
+ * the model decides mid-task work should continue anyway, its native tool-call
+ * markup (DeepSeek DSML: `<｜DSML｜tool_calls>…`, or other `<｜…｜>` special-token
+ * families) arrives as plain TEXT and would leak verbatim to the user. Cut the
+ * answer at the first such marker and keep only the prose prefix; the caller
+ * falls back to a mechanical execution report when nothing readable remains.
+ */
+export function stripToolCallMarkup(content: string): string {
+  if (!content) return "";
+  // Fullwidth-bar (U+FF5C) special tokens and the ASCII-bar DSML variant.
+  const m = content.search(/<[｜|]|<\/[｜|]/);
+  const cut = m >= 0 ? content.slice(0, m) : content;
+  return cut.trim();
+}
+
+/** Deterministic, model-free closing report built from the per-turn tool
+ *  execution record — the fallback when the model cannot produce usable prose. */
+function buildExecReport(execLog: Array<{ name: string; ok: boolean; ms: number }>): string {
+  const ok = execLog.filter((c) => c.ok).length;
+  const failed = execLog.length - ok;
+  const lines = execLog.slice(-30).map((c) => `- ${c.name}: ${c.ok ? "成功" : "失敗"}`);
+  return (
+    "（モデルから最終まとめの応答を取得できなかったため、実行記録から機械生成した報告です）\n" +
+    `このターンで実行したツール呼び出し: ${ok}件成功 / ${failed}件失敗\n` +
+    lines.join("\n") +
+    "\n※ 上記に無い作業は実行されていません。作業が途中の場合は続きを依頼してください。"
+  );
+}
+
 /** One tool_call as returned by a non-streaming chat.completions response. */
 interface ToolCall {
   id: string;
@@ -396,7 +427,11 @@ export class OpenAiEngine implements InterruptibleEngine {
         // results as an `Error:`-prefixed string instead of throwing.
         const callOk = !callThrew && !toolResult.startsWith("Error:");
         execLog.push({ name, ok: callOk, ms: callMs });
-        logger.info(`[${this.name}] tool ${name} ${callOk ? "ok" : "FAILED"} in ${callMs}ms (${toolResult.length} chars) (session ${sid})`);
+        // Include a one-line result preview: an MCP call can be transport-"ok"
+        // while its payload is really a failure message, and the preview is how
+        // that shows up in the log without replaying the turn.
+        const preview = toolResult.replace(/\s+/g, " ").slice(0, 120);
+        logger.info(`[${this.name}] tool ${name} ${callOk ? "ok" : "FAILED"} in ${callMs}ms (${toolResult.length} chars) preview="${preview}" (session ${sid})`);
         onStream?.({ type: "tool_result", content: toolResult, toolName: name, toolId: call.id } satisfies StreamDelta);
         messages.push({ role: "tool", tool_call_id: call.id, content: toolResult });
       }
@@ -460,7 +495,14 @@ export class OpenAiEngine implements InterruptibleEngine {
           if (res.ok) {
             const completion = (await res.json()) as ChatCompletion;
             if (completion.usage) usage = completion.usage;
-            finalText = completion.choices?.[0]?.message?.content ?? "";
+            const rawSummary = completion.choices?.[0]?.message?.content ?? "";
+            finalText = stripToolCallMarkup(rawSummary);
+            if (rawSummary && finalText.length < rawSummary.trim().length) {
+              // The model tried to CONTINUE the work instead of summarizing —
+              // with no tools in the request its native tool-call markup came
+              // back as plain text and must never reach the user.
+              logger.warn(`[${this.name}] summary round emitted raw tool-call markup — stripped ${rawSummary.length - finalText.length} chars`);
+            }
             if (finalText) onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
           } else {
             const errText = await this.safeReadError(res);
@@ -473,7 +515,10 @@ export class OpenAiEngine implements InterruptibleEngine {
         if (!finalText) {
           // Last resort: never end a tool-running turn with an empty success —
           // downstream treats "" as "no work happened" and drops the message.
-          finalText = "（ツールの実行は完了しましたが、モデルから最終まとめの応答を取得できませんでした。実行内容は各ツールの結果をご確認ください。）";
+          // Model-free by design: at this point the model has already failed
+          // twice to produce prose, so report the execution record verbatim.
+          finalText = buildExecReport(execLog);
+          onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
         }
         if (okCalls === 0) {
           // Every call failed and the model produced no organic final answer —
