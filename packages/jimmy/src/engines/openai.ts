@@ -52,6 +52,10 @@ export interface OpenAiEngineConfig {
   bridgeFactory?: (deps?: Partial<BridgeDeps>) => McpToolBridge;
   /** Test seam: partial deps forwarded to the default bridge factory. */
   bridgeDeps?: Partial<BridgeDeps>;
+  /** The model's context window in tokens. Drives the tool-loop context budget
+   *  guard (stop calling tools before the transcript outgrows the window).
+   *  Defaults to 65536 — set it to the real window of the served model. */
+  contextWindowTokens?: number;
 }
 
 /** Upper bound on tool-call rounds so a model that keeps requesting tools can't
@@ -61,6 +65,103 @@ export interface OpenAiEngineConfig {
  *  per-turn "tool loop finished" INFO log records rounds used, so this can be
  *  tightened later from observed data. */
 const MAX_TOOL_ROUNDS = 32;
+
+/** Hard cap on a single tool result fed back to the model. One crawler page /
+ *  file dump can be tens of thousands of characters; unbounded results let a
+ *  handful of calls exhaust the whole context window mid-loop. */
+const MAX_TOOL_RESULT_CHARS = 4000;
+/** How many of the most recent tool results are kept at full (capped) length
+ *  when older ones are compacted between rounds. */
+const KEEP_RECENT_TOOL_RESULTS = 4;
+/** Length older tool results are compacted down to. The model has already
+ *  consumed them in earlier rounds; a head excerpt keeps them identifiable. */
+const COMPACT_TOOL_RESULT_CHARS = 400;
+/** Default context window when the config doesn't declare one. */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 65536;
+/** Stop the tool loop (and go straight to the summary round) once the
+ *  estimated transcript reaches this fraction of the context window, leaving
+ *  headroom for the summary round's own input and output. */
+const CONTEXT_BUDGET_RATIO = 0.8;
+/** Crude chars→tokens divisor for budget estimation. Deliberately conservative
+ *  (CJK text runs ~1 token/char, English ~4 chars/token). */
+const APPROX_CHARS_PER_TOKEN = 2;
+
+/** Cap a single tool result, marking the cut so the model knows the tail is
+ *  missing (and can re-query more narrowly instead of trusting a silent cut). */
+export function truncateToolResult(result: string, maxChars: number = MAX_TOOL_RESULT_CHARS): string {
+  if (result.length <= maxChars) return result;
+  return (
+    result.slice(0, maxChars) +
+    `\n…[tool result truncated: showing first ${maxChars} of ${result.length} chars]`
+  );
+}
+
+/** Compact all but the most recent `keepRecent` tool results down to a head
+ *  excerpt. The model already acted on the old results in earlier rounds; only
+ *  the recent ones still carry working context. Mutates `messages` in place and
+ *  returns how many results were compacted. Idempotent across rounds. */
+export function compactOldToolResults(
+  messages: ChatMessage[],
+  keepRecent: number = KEEP_RECENT_TOOL_RESULTS,
+  keepChars: number = COMPACT_TOOL_RESULT_CHARS,
+): number {
+  const toolIdx: number[] = [];
+  for (let i = 0; i < messages.length; i++) if (messages[i].role === "tool") toolIdx.push(i);
+  let compacted = 0;
+  for (let k = 0; k < toolIdx.length - keepRecent; k++) {
+    const msg = messages[toolIdx[k]] as Extract<ChatMessage, { role: "tool" }>;
+    if (msg.content.length <= keepChars) continue;
+    const head = msg.content.slice(0, keepChars);
+    const next = head + `\n…[older tool result compacted to ${keepChars} chars]`;
+    if (msg.content === next) continue;
+    msg.content = next;
+    compacted++;
+  }
+  return compacted;
+}
+
+/** Crude token estimate for the context budget guard (see
+ *  APPROX_CHARS_PER_TOKEN). Only used to decide when to stop looping — the
+ *  serving stack remains the source of truth via `usage`. */
+export function estimateTokensFromChars(chars: number): number {
+  return Math.ceil(chars / APPROX_CHARS_PER_TOKEN);
+}
+
+/** True when an upstream 400 is the "input exceeds the context window" family. */
+function isContextLengthError(status: number, errText: string): boolean {
+  return (
+    status === 400 &&
+    /context length|context window|maximum context|input_tokens|too many tokens|reduce the length/i.test(
+      errText || "",
+    )
+  );
+}
+
+/**
+ * Trim a prose fragment down to its last complete sentence. Used when
+ * `stripToolCallMarkup` cut a summary mid-stream: the surviving prefix often
+ * ends mid-sentence ("… however, the") and must not reach the user as-is.
+ * A sentence ends at CJK/ASCII terminal punctuation (。．！？!?… or a period
+ * followed by whitespace/closing quotes/end) including any closing
+ * quotes/brackets after it; a newline also counts as a safe boundary (list
+ * items and headings rarely carry terminal punctuation). Returns "" when no
+ * complete sentence survives.
+ */
+export function trimToLastCompleteSentence(text: string): string {
+  const t = text.trimEnd();
+  if (!t) return "";
+  let lastEnd = -1;
+  const re = /[。．！？!?…]|\.(?=[\s"'」』)）\]]|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    let end = m.index + m[0].length;
+    while (end < t.length && /[」』"'）)\]]/.test(t[end]!)) end++;
+    lastEnd = end;
+  }
+  const lastNewline = t.lastIndexOf("\n");
+  lastEnd = Math.max(lastEnd, lastNewline);
+  return lastEnd >= 0 ? t.slice(0, lastEnd).trimEnd() : "";
+}
 
 /**
  * Strip raw tool-call markup from a summary-round answer. The summary round
@@ -79,17 +180,25 @@ export function stripToolCallMarkup(content: string): string {
   return cut.trim();
 }
 
-/** Deterministic, model-free closing report built from the per-turn tool
- *  execution record — the fallback when the model cannot produce usable prose. */
-function buildExecReport(execLog: Array<{ name: string; ok: boolean; ms: number }>): string {
+/** The shared body of every mechanical execution report: per-call ok/failed
+ *  lines from the authoritative per-turn record. */
+function execDigest(execLog: Array<{ name: string; ok: boolean; ms: number }>): string {
   const ok = execLog.filter((c) => c.ok).length;
   const failed = execLog.length - ok;
   const lines = execLog.slice(-30).map((c) => `- ${c.name}: ${c.ok ? "成功" : "失敗"}`);
   return (
-    "（モデルから最終まとめの応答を取得できなかったため、実行記録から機械生成した報告です）\n" +
     `このターンで実行したツール呼び出し: ${ok}件成功 / ${failed}件失敗\n` +
     lines.join("\n") +
     "\n※ 上記に無い作業は実行されていません。作業が途中の場合は続きを依頼してください。"
+  );
+}
+
+/** Deterministic, model-free closing report built from the per-turn tool
+ *  execution record — the fallback when the model cannot produce usable prose. */
+function buildExecReport(execLog: Array<{ name: string; ok: boolean; ms: number }>): string {
+  return (
+    "（モデルから最終まとめの応答を取得できなかったため、実行記録から機械生成した報告です）\n" +
+    execDigest(execLog)
   );
 }
 
@@ -114,7 +223,7 @@ interface ChatCompletion {
 }
 
 /** A chat message we build for the tool-call loop. */
-type ChatMessage =
+export type ChatMessage =
   | { role: "system" | "user" | "assistant"; content: string; tool_calls?: ToolCall[] }
   | { role: "assistant"; content: string | null; tool_calls: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
@@ -144,6 +253,7 @@ export class OpenAiEngine implements InterruptibleEngine {
   private temperature?: number;
   private bridgeFactory: (deps?: Partial<BridgeDeps>) => McpToolBridge;
   private bridgeDeps?: Partial<BridgeDeps>;
+  private contextWindowTokens: number;
   /** Live MCP bridges keyed by sessionId, so kill()/killAll() can close them. */
   private liveBridges = new Map<string, McpToolBridge>();
 
@@ -164,6 +274,7 @@ export class OpenAiEngine implements InterruptibleEngine {
     this.temperature = cfg.temperature;
     this.bridgeFactory = cfg.bridgeFactory ?? ((deps) => new McpToolBridge(deps));
     this.bridgeDeps = cfg.bridgeDeps;
+    this.contextWindowTokens = cfg.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
   }
 
   kill(sessionId: string): void {
@@ -353,9 +464,33 @@ export class OpenAiEngine implements InterruptibleEngine {
     // neither threw nor returned its `Error:`-prefixed failure string.
     const execLog: Array<{ name: string; ok: boolean; ms: number }> = [];
     let roundsUsed = 0;
+    // Context budget guard: `lastUsageTokens` is the serving stack's exact
+    // count for the previous request+response; `charsSinceUsage` estimates
+    // what we've appended since. When the projection crosses the budget the
+    // loop ends early and the turn closes via the summary round instead of
+    // dying on an upstream context-length 400.
+    const budgetTokens = Math.floor(this.contextWindowTokens * CONTEXT_BUDGET_RATIO);
+    let lastUsageTokens = 0;
+    let charsSinceUsage = 0;
+    let contextExhausted = false;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
+
+      if (round > 0) {
+        // Between rounds, shrink older tool results the model has already
+        // consumed so long multi-fetch workflows don't accumulate dead weight.
+        const n = compactOldToolResults(messages);
+        if (n > 0) {
+          logger.info(`[${this.name}] compacted ${n} older tool result(s) to ${COMPACT_TOOL_RESULT_CHARS} chars (session ${sid})`);
+        }
+        const projected = lastUsageTokens + estimateTokensFromChars(charsSinceUsage);
+        if (lastUsageTokens > 0 && projected > budgetTokens) {
+          contextExhausted = true;
+          logger.warn(`[${this.name}] context budget reached (~${projected}/${this.contextWindowTokens} tokens, budget ${budgetTokens}) — ending tool loop for a summary round (session ${sid})`);
+          break;
+        }
+      }
       roundsUsed = round + 1;
 
       const body: Record<string, unknown> = {
@@ -376,11 +511,24 @@ export class OpenAiEngine implements InterruptibleEngine {
       if (!res.ok) {
         const errText = await this.safeReadError(res);
         logger.error(`[${this.name}] HTTP ${res.status}${errText ? `: ${errText.slice(0, 500)}` : ""}`);
+        if (isContextLengthError(res.status, errText) && execLog.length > 0) {
+          // The transcript outgrew the window despite the budget guard (the
+          // estimate is crude on purpose). Work already ran — salvage the turn
+          // via the summary round over a compacted transcript instead of
+          // failing it.
+          contextExhausted = true;
+          logger.warn(`[${this.name}] context-length 400 mid-loop after ${execLog.length} tool call(s) — falling back to a summary round (session ${sid})`);
+          break;
+        }
         const msg = this.friendlyError(res.status, errText);
         return { sessionId: sid, result: "", error: msg };
       }
       const completion = (await res.json()) as ChatCompletion;
-      if (completion.usage) usage = completion.usage;
+      if (completion.usage) {
+        usage = completion.usage;
+        lastUsageTokens = (completion.usage.prompt_tokens ?? 0) + (completion.usage.completion_tokens ?? 0);
+        charsSinceUsage = 0;
+      }
       const message = completion.choices?.[0]?.message;
       const toolCalls = message?.tool_calls ?? [];
 
@@ -393,6 +541,7 @@ export class OpenAiEngine implements InterruptibleEngine {
 
       // Record the assistant's tool-call turn, then execute each call.
       messages.push({ role: "assistant", content: message?.content ?? null, tool_calls: toolCalls });
+      charsSinceUsage += (message?.content?.length ?? 0) + JSON.stringify(toolCalls).length;
 
       for (const call of toolCalls) {
         if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
@@ -438,8 +587,15 @@ export class OpenAiEngine implements InterruptibleEngine {
         // that shows up in the log without replaying the turn.
         const preview = toolResult.replace(/\s+/g, " ").slice(0, 120);
         logger.info(`[${this.name}] tool ${name} ${callOk ? "ok" : "FAILED"} in ${callMs}ms (${toolResult.length} chars) preview="${preview}" (session ${sid})`);
-        onStream?.({ type: "tool_result", content: toolResult, toolName: name, toolId: call.id } satisfies StreamDelta);
-        messages.push({ role: "tool", tool_call_id: call.id, content: toolResult });
+        // Cap the result BEFORE it enters the transcript: one oversized page
+        // dump must not eat the whole context window.
+        const stored = truncateToolResult(toolResult);
+        if (stored.length < toolResult.length) {
+          logger.info(`[${this.name}] tool ${name} result truncated ${toolResult.length}→${stored.length} chars (session ${sid})`);
+        }
+        onStream?.({ type: "tool_result", content: stored, toolName: name, toolId: call.id } satisfies StreamDelta);
+        messages.push({ role: "tool", tool_call_id: call.id, content: stored });
+        charsSinceUsage += stored.length + 100; // +100 ≈ per-message JSON overhead
       }
       // Loop again with the tool results appended.
     }
@@ -473,6 +629,12 @@ export class OpenAiEngine implements InterruptibleEngine {
       } else {
         // Anchor the summary to the authoritative execution record so the
         // model cannot pass off unexecuted work as done.
+        if (contextExhausted) {
+          // The transcript is at (or beyond) the window — shrink it hard so
+          // the summary round itself doesn't 400. Keep only the newest tool
+          // result near full size; the digest below preserves the facts.
+          compactOldToolResults(messages, 1);
+        }
         const digest = execLog
           .slice(-30)
           .map((c) => `- ${c.name}: ${c.ok ? "ok" : "FAILED"}`)
@@ -480,6 +642,9 @@ export class OpenAiEngine implements InterruptibleEngine {
         messages.push({
           role: "user",
           content:
+            (contextExhausted
+              ? "(system note) The context budget for this turn ran out, so the task was cut short mid-workflow. Report progress so far honestly as PARTIAL.\n"
+              : "") +
             "(system note) Tools are no longer available for this turn. This is the AUTHORITATIVE record of the tool calls that actually executed in this turn:\n" +
             digest +
             "\nWrite the final report for the requester STRICTLY from this record and the tool results above. " +
@@ -506,12 +671,23 @@ export class OpenAiEngine implements InterruptibleEngine {
             const completion = (await res.json()) as ChatCompletion;
             if (completion.usage) usage = completion.usage;
             const rawSummary = completion.choices?.[0]?.message?.content ?? "";
-            finalText = stripToolCallMarkup(rawSummary);
-            if (rawSummary && finalText.length < rawSummary.trim().length) {
+            const stripped = stripToolCallMarkup(rawSummary);
+            if (rawSummary && stripped.length < rawSummary.trim().length) {
               // The model tried to CONTINUE the work instead of summarizing —
               // with no tools in the request its native tool-call markup came
               // back as plain text and must never reach the user.
-              logger.warn(`[${this.name}] summary round emitted raw tool-call markup — stripped ${rawSummary.length - finalText.length} chars`);
+              logger.warn(`[${this.name}] summary round emitted raw tool-call markup — stripped ${rawSummary.length - stripped.length} chars`);
+              // The surviving prose prefix usually ends mid-sentence right
+              // where the markup began. Keep only complete sentences and
+              // always co-report the mechanical execution record so the
+              // reader still gets the facts the cut swallowed.
+              const prose = trimToLastCompleteSentence(stripped);
+              finalText =
+                (prose ? prose + "\n\n" : "") +
+                "（※モデルの報告が途中で途切れたため、以下は実行記録の要約です）\n" +
+                execDigest(execLog);
+            } else {
+              finalText = stripped;
             }
             if (finalText) onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
           } else {
@@ -580,12 +756,7 @@ export class OpenAiEngine implements InterruptibleEngine {
    */
   private friendlyError(status: number, errText: string): string {
     const t = errText || "";
-    const isCtx =
-      status === 400 &&
-      /context length|context window|maximum context|input_tokens|too many tokens|reduce the length/i.test(
-        t,
-      );
-    if (isCtx) {
+    if (isContextLengthError(status, t)) {
       const maxM = t.match(/maximum context length is\s+(\d+)/i);
       const gotM =
         t.match(/contains at least\s+(\d+)/i) || t.match(/(\d+)\s+input tokens/i);

@@ -39,6 +39,7 @@ export default defineEnginePlugin({
       headers?: Record<string, string>;
       temperature?: number;
       name?: string;
+      contextWindowTokens?: number;
     };
     if (!c.baseUrl || typeof c.baseUrl !== "string") {
       throw new Error(`openai engine "${c.name ?? "openai"}" requires "baseUrl"`);
@@ -59,6 +60,7 @@ export default defineEnginePlugin({
       headers: c.headers,
       temperature: c.temperature,
       name: c.name,
+      contextWindowTokens: c.contextWindowTokens,
     });
   },
 });
