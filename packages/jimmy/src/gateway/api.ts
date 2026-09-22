@@ -31,6 +31,7 @@ import {
 } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "../sessions/origin-delivery.js";
+import { autoContinueIncompleteTurn, autoContinueLimit, isIncompleteTurn } from "../sessions/auto-continue.js";
 import {
   CONFIG_PATH,
   CRON_JOBS,
@@ -2826,7 +2827,7 @@ async function runWebSession(
       })()
       : prompt;
 
-    const result = await engine.run({
+    let result = await engine.run({
       prompt: promptToRun,
       resumeSessionId: currentSession.engineSessionId ?? undefined,
       systemPrompt,
@@ -3183,6 +3184,64 @@ async function runWebSession(
         return;
       } finally {
         clearInterval(heartbeat);
+      }
+    }
+
+    // Auto-continuation: the engine mechanically flagged this turn as ended
+    // mid-workflow (tool-round/context budget → summary round) — this is the
+    // primary path for 職人 (employee handoff) sessions whose long workflows
+    // don't fit one turn. Re-run bounded continuation turns on the same
+    // engine session with the executed-tool record attached; intermediate
+    // partial reports are persisted to the session log, and only the final
+    // turn's text flows into the normal delivery below.
+    if (!wasInterrupted && isIncompleteTurn(result)) {
+      const continueLimit = autoContinueLimit(config);
+      if (continueLimit > 0) {
+        result = await autoContinueIncompleteTurn(
+          `Web session ${currentSession.id}`,
+          result,
+          continueLimit,
+          async (continuationPrompt, prev) => {
+            const continuationHeartbeat = setInterval(() => {
+              updateSession(currentSession.id, { status: "running", lastActivity: new Date().toISOString() });
+            }, 5000);
+            try {
+              return await engine.run({
+                prompt: continuationPrompt,
+                resumeSessionId: prev.sessionId?.trim() || currentSession.engineSessionId || undefined,
+                systemPrompt,
+                cwd: JINN_HOME,
+                bin: engineConfig.bin,
+                model: currentSession.model ?? employee?.model ?? engineConfig.model,
+                effortLevel,
+                cliFlags: employee?.cliFlags,
+                sshHost: employee?.sshHost,
+                remoteCwd: employee?.remoteCwd,
+                mcpConfigPath,
+                sessionId: currentSession.id,
+                onStream: (delta) => {
+                  context.emit("session:delta", {
+                    sessionId: currentSession.id,
+                    type: delta.type,
+                    content: delta.content,
+                    toolName: delta.toolName,
+                    toolId: delta.toolId,
+                    subAgent: delta.subAgent,
+                  });
+                },
+              });
+            } finally {
+              clearInterval(continuationHeartbeat);
+            }
+          },
+          (partial) => {
+            if (partial.result) insertMessage(currentSession.id, "assistant", partial.result);
+          },
+        );
+        if (!getSession(currentSession.id)) {
+          logger.info(`Skipping completion for web session ${currentSession.id} deleted during auto-continuation`);
+          return;
+        }
       }
     }
 

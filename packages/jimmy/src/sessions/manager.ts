@@ -25,6 +25,7 @@ import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyD
 import { buildContext, userKey } from "./context.js";
 import { normalizeDelivery, normalizeTurns, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
 import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "./origin-delivery.js";
+import { autoContinueIncompleteTurn, autoContinueLimit, isIncompleteTurn } from "./auto-continue.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
@@ -846,6 +847,50 @@ export class SessionManager {
             attachments: attachments.length > 0 ? attachments : undefined,
             sessionId: session.id,
           });
+        }
+      }
+
+      // Auto-continuation: the engine mechanically flagged this turn as ended
+      // mid-workflow (tool-round/context budget → summary round). Re-run
+      // bounded continuation turns on the same engine session, attaching the
+      // executed-tool record so finished work is not repeated. Intermediate
+      // partial reports are persisted to the session log only; the existing
+      // delivery path below sends the FINAL turn's text.
+      {
+        const continueLimit = autoContinueLimit(this.config);
+        if (continueLimit > 0 && isIncompleteTurn(result)) {
+          result = await autoContinueIncompleteTurn(
+            `Session ${session.id}`,
+            result,
+            continueLimit,
+            async (continuationPrompt, prev) => {
+              updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+              const heartbeat = setInterval(() => {
+                updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+              }, 20_000);
+              try {
+                return await engine.run({
+                  prompt: continuationPrompt,
+                  resumeSessionId: prev.sessionId?.trim() || session.engineSessionId || undefined,
+                  systemPrompt,
+                  cwd: JINN_HOME,
+                  bin: engineConfig.bin,
+                  model: session.model ?? engineConfig.model,
+                  effortLevel,
+                  cliFlags: employee?.cliFlags,
+                  sshHost: employee?.sshHost,
+                  remoteCwd: employee?.remoteCwd,
+                  mcpConfigPath,
+                  sessionId: session.id,
+                });
+              } finally {
+                clearInterval(heartbeat);
+              }
+            },
+            (partial) => {
+              if (partial.result) insertMessage(session.id, "assistant", partial.result);
+            },
+          );
         }
       }
 

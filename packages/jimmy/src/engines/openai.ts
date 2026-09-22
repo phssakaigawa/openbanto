@@ -473,6 +473,10 @@ export class OpenAiEngine implements InterruptibleEngine {
     let lastUsageTokens = 0;
     let charsSinceUsage = 0;
     let contextExhausted = false;
+    // True when the turn had to be closed by the summary round (or its
+    // machine-generated fallback) instead of the model's own completion —
+    // the mechanical "ended mid-workflow" signal behind EngineResult.incomplete.
+    let summaryRoundUsed = false;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
@@ -627,6 +631,7 @@ export class OpenAiEngine implements InterruptibleEngine {
           "（このターンではツールを一度も実行できず、モデルからの最終応答もありませんでした。作業は行われていません。依頼を分割するか、もう一度お試しください。）";
         turnError = "tool loop produced no output and executed no tool calls";
       } else {
+        summaryRoundUsed = true;
         // Anchor the summary to the authoritative execution record so the
         // model cannot pass off unexecuted work as done.
         if (contextExhausted) {
@@ -721,10 +726,20 @@ export class OpenAiEngine implements InterruptibleEngine {
 
     const contextTokens = usage?.prompt_tokens;
     const cost = typeof usage?.cost === "number" ? usage.cost : undefined;
+    // Mid-workflow signal for the gateway's bounded auto-continuation: the
+    // model never produced an organic completion this turn (round/context
+    // budget ran out, or the last round came back empty) and the closing text
+    // had to come from the summary round. Error turns are excluded — a
+    // continuation cannot fix "nothing ran / everything failed".
+    const incomplete = summaryRoundUsed && !turnError;
     return {
       sessionId: sid,
       result: finalText,
       ...(turnError ? { error: turnError } : {}),
+      ...(incomplete ? { incomplete: true } : {}),
+      ...(execLog.length > 0
+        ? { executedToolCalls: execLog.map(({ name, ok }) => ({ name, ok })) }
+        : {}),
       durationMs: Date.now() - startedAt,
       ...(typeof contextTokens === "number" ? { contextTokens } : {}),
       ...(typeof cost === "number" ? { cost } : {}),

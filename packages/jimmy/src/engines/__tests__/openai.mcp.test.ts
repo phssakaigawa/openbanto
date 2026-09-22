@@ -170,6 +170,10 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     // (4) final text returned + streamed
     expect(result.result).toBe("It is sunny, 25C in Tokyo.");
     expect(result.error).toBeUndefined();
+    // Organic completion — not flagged for auto-continuation, but the
+    // executed-tool record is still attached.
+    expect(result.incomplete).toBeUndefined();
+    expect(result.executedToolCalls).toEqual([{ name: "weather__get_weather", ok: true }]);
     expect(result.contextTokens).toBe(100);
     expect(deltas.filter((d) => d.type === "text").map((d) => d.content)).toEqual(["It is sunny, 25C in Tokyo."]);
     expect(deltas.some((d) => d.type === "tool_use" && d.toolName === "weather__get_weather")).toBe(true);
@@ -306,6 +310,11 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     // The turn never ends with an empty success once tools have run.
     expect(result.error).toBeUndefined();
     expect(result.result).toBe("Created thing id=234.");
+    // Summary-round closing = the model never completed organically: the turn
+    // is mechanically flagged mid-workflow for the gateway's auto-continuation,
+    // with the authoritative execution record attached.
+    expect(result.incomplete).toBe(true);
+    expect(result.executedToolCalls).toEqual([{ name: "srv__create_thing", ok: true }]);
   });
 
   it("returns a non-empty fallback when even the summary round yields no text", async () => {
@@ -385,6 +394,9 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     expect(result.error).toBeDefined();
     expect(result.result.length).toBeGreaterThan(0);
     expect(client.callLog).toHaveLength(0);
+    // Error turns are never flagged for auto-continuation — repeating a turn
+    // where nothing ran would loop uselessly.
+    expect(result.incomplete).toBeUndefined();
   });
 
   it("anchors the summary round to the execution record and errors when every call failed", async () => {
