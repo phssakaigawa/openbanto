@@ -299,6 +299,30 @@ export function buildContext(opts: {
     });
   }
 
+  // ── STANDARD: Confirmation-choice buttons (Slack sessions only) ──
+  // Contract with the Slack connector (choice-buttons.ts): a trailing
+  // [[choices: …]] line becomes interactive buttons; the pressed label is
+  // injected back as the user's reply. Only Slack-source sessions get this
+  // instruction, so other connectors never see the marker.
+  if (opts.source === "slack") {
+    sections.push({
+      tier: Tier.STANDARD,
+      marker: "## Confirmation-choice buttons",
+      content: [
+        `## Confirmation-choice buttons`,
+        ``,
+        `When you ask the user a ROUTINE confirmation question whose useful answers are a few fixed choices (continue/skip/abort, yes/no, pick one of N named options), append a marker as the FINAL line of your reply:`,
+        ``,
+        `[[choices: 続けて|スキップ|中止]]`,
+        ``,
+        `- 2–5 choices, short labels (≤20 chars each), separated by \`|\`. Labels must be the literal answers you expect back.`,
+        `- The chat client renders them as buttons; the pressed label arrives as the user's next message. Users may still TYPE an answer instead — treat a typed answer and a button press identically.`,
+        `- At most one marker per message, only when you end your turn waiting for exactly that answer. Never use it for open-ended questions or when free text is needed.`,
+      ].join("\n"),
+      summary: `## Confirmation-choice buttons\nFor routine fixed-choice confirmation questions, end the reply with \`[[choices: A|B]]\` on its own final line.`,
+    });
+  }
+
   // ── STANDARD: Language override for skills ──────────────────
   if (language !== "English") {
     sections.push({

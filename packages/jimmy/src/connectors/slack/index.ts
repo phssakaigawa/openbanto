@@ -27,6 +27,12 @@ import { explicitThread } from "../../shared/threading.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
 import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
+import {
+  CHOICE_ACTION_ID_PATTERN,
+  buildChoiceBlocks,
+  buildChosenBlocks,
+  parseChoiceMarker,
+} from "./choice-buttons.js";
 import { startsWithSlashCommand } from "../../sessions/manager.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
@@ -75,6 +81,8 @@ export class SlackConnector implements Connector {
   /** Block Kit button handlers keyed by action_id (see SlackConnectorConfig). */
   private readonly actionHooks: Record<string, SlackActionHook> | null;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  /** Choice-buttons messages already pressed (double-press guard; bounded). */
+  private pressedChoiceMessages = new Set<string>();
   private readonly triageConfig: SlackTriageConfig | undefined;
   private readonly respondTo: SlackRespondToConfig | undefined;
   private readonly goalExtractionConfig: SlackGoalExtractionConfig | undefined;
@@ -763,6 +771,81 @@ export class SlackConnector implements Connector {
       });
     }
 
+    // Confirmation-choice buttons ([[choices: …]] marker in an assistant
+    // reply, see choice-buttons.ts). A press is injected into the same
+    // conversation session as if the pressing user had typed the choice —
+    // full speaker identity attached — and the buttons message is rewritten
+    // to show the outcome (which also prevents double presses).
+    this.app.action(CHOICE_ACTION_ID_PATTERN, async ({ ack, body, client }) => {
+      await ack();
+      const b = body as any;
+      const chosen = String(b.actions?.[0]?.value ?? "").trim();
+      const channel: string | undefined = b.channel?.id ?? b.container?.channel_id;
+      const messageTs: string | undefined = b.message?.ts ?? b.container?.message_ts;
+      const threadTs: string | undefined = b.message?.thread_ts;
+      const userId: string | undefined = b.user?.id;
+      if (!chosen || !channel || !messageTs || !userId) {
+        logger.warn(`[slack] choice press with incomplete payload (channel=${channel} ts=${messageTs} user=${userId})`);
+        return;
+      }
+      // In-memory double-press guard: chat.update removes the buttons, but a
+      // second press can race the update.
+      const pressKey = `${channel}:${messageTs}`;
+      if (this.pressedChoiceMessages.has(pressKey)) return;
+      this.pressedChoiceMessages.add(pressKey);
+      if (this.pressedChoiceMessages.size > 500) {
+        const first = this.pressedChoiceMessages.values().next().value;
+        if (first) this.pressedChoiceMessages.delete(first);
+      }
+      logger.info(`[slack] choice "${chosen}" pressed by ${userId} in ${channel} (thread=${threadTs ?? "-"})`);
+
+      const { blocks, text } = buildChosenBlocks(chosen, userId);
+      await client.chat
+        .update({ channel, ts: messageTs, text, blocks: blocks as never })
+        .catch((err: unknown) => logger.warn(`[slack] choice buttons update failed: ${this.formatSlackError(err)}`));
+
+      if (!this.handler) return;
+      // Inject as the pressing user's reply. Session resolution mirrors a
+      // typed reply to the buttons message (thread reply → thread session,
+      // bare DM press → the per-user DM timeline session).
+      const channelType = channel.startsWith("D") ? "im" : "channel";
+      const syntheticEvent = {
+        channel,
+        channel_type: channelType,
+        user: userId,
+        ts: b.actions?.[0]?.action_ts ?? messageTs,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      };
+      const [channelInfo, speaker] = await Promise.all([
+        this.resolveChannelInfo(channel),
+        this.resolveSpeakerInfo(userId),
+      ]);
+      const msg: IncomingMessage = {
+        connector: this.name,
+        source: "slack",
+        sessionKey: deriveSessionKey(syntheticEvent),
+        replyContext: buildReplyContext(syntheticEvent),
+        messageId: syntheticEvent.ts,
+        channel,
+        thread: threadTs,
+        user: userId,
+        userId,
+        text: chosen,
+        attachments: [],
+        raw: body,
+        transportMeta: {
+          channelType,
+          channelExternal: channelType !== "im" && channelInfo.isExtShared,
+          team: (b.team?.id as string) || null,
+          channelName: channelInfo.name || null,
+          wasMentioned: false,
+          choiceButtonPress: true,
+          ...this.speakerTransportFields(speaker, userId),
+        },
+      };
+      this.handler(msg);
+    });
+
     this.app.event("reaction_added", async ({ event }) => {
       // Only handle reactions on messages (not files, etc.)
       if (event.item.type !== "message") return;
@@ -965,7 +1048,10 @@ export class SlackConnector implements Connector {
     if (thread) {
       return this.replyMessage({ ...target, thread }, text);
     }
-    const chunks = formatResponse(text);
+    // Trailing [[choices: …]] marker → post the question text, then an
+    // interactive buttons message (see choice-buttons.ts for the contract).
+    const parsed = parseChoiceMarker(text);
+    const chunks = formatResponse(parsed ? parsed.body : text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
       if (!chunk.trim()) continue;
@@ -974,6 +1060,12 @@ export class SlackConnector implements Connector {
         text: chunk,
       });
       lastTs = res.ts;
+    }
+    if (parsed && lastTs) {
+      // Post the buttons bare (no thread) right after the question: a press
+      // then resolves to the same session a typed reply to these root
+      // messages would (DM timeline stays the per-user session).
+      lastTs = (await this.postChoiceButtons(target.channel, undefined, parsed.choices)) ?? lastTs;
     }
     // A newly-posted root message will be the thread_ts for any follow-up replies,
     // so mark its future thread as bot-engaged. Only relevant when tracking is on.
@@ -986,7 +1078,8 @@ export class SlackConnector implements Connector {
   async replyMessage(target: Target, text: string): Promise<string | undefined> {
     if (!text || !text.trim()) return undefined;
     const threadTs = target.thread || target.messageTs;
-    const chunks = formatResponse(text);
+    const parsed = parseChoiceMarker(text);
+    const chunks = formatResponse(parsed ? parsed.body : text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
       if (!chunk.trim()) continue;
@@ -997,6 +1090,9 @@ export class SlackConnector implements Connector {
       });
       lastTs = res.ts;
     }
+    if (parsed) {
+      lastTs = (await this.postChoiceButtons(target.channel, threadTs, parsed.choices)) ?? lastTs;
+    }
     // Record the thread the bot just replied in. Subsequent user replies in
     // this same thread will carry thread_ts === threadTs and bypass triage
     // and the respondTo mention gate. Only relevant when tracking is on.
@@ -1004,6 +1100,28 @@ export class SlackConnector implements Connector {
       this.conversations.recordBotInitiatedThread(target.channel, threadTs);
     }
     return lastTs;
+  }
+
+  /** Post the interactive buttons message for a parsed [[choices: …]] marker. */
+  private async postChoiceButtons(
+    channel: string,
+    threadTs: string | undefined,
+    choices: string[],
+  ): Promise<string | undefined> {
+    try {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+        text: `選択肢: ${choices.join(" / ")}`,
+        blocks: buildChoiceBlocks(choices) as never,
+      });
+      return res.ts;
+    } catch (err) {
+      // Degrade to text-only: the choices were already readable in the
+      // question and a typed reply still works.
+      logger.warn(`[slack] choice buttons post failed (text fallback remains): ${this.formatSlackError(err)}`);
+      return undefined;
+    }
   }
 
   async addReaction(target: Target, emoji: string) {
