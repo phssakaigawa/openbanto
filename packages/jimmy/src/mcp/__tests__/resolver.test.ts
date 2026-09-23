@@ -147,3 +147,35 @@ describe("resolveMcpServers — per-turn identity injection (番頭ID伝播)", (
     expect(ledger.headers?.Authorization).toBe("Bearer STATIC");
   });
 });
+
+  it("percent-encodes non-ISO-8859-1 identity header values (#594: Japanese display name must not kill the connection)", () => {
+    const config = {
+      knowledge: { enabled: false },
+      gateway: { enabled: false },
+      browser: { enabled: false },
+      fetch: { enabled: false },
+      search: { enabled: false },
+      custom: {
+        ledger: {
+          url: "https://example.test/mcp",
+          headers: { Authorization: "Bearer STATIC" },
+        },
+      },
+    } satisfies JinnConfig["mcp"];
+
+    const resolved = resolveMcpServers(config, undefined, {
+      connector: "slack",
+      channel: "C123",
+      userId: "U999",
+      userName: "境川章一郎",
+    });
+
+    const ledger = resolved.mcpServers.ledger as McpServerUrlConfig;
+    const headers = ledger.headers as Record<string, string>;
+    expect(headers["X-Banto-User-Id"]).toBe("U999"); // ASCII passes through
+    expect(headers["X-Banto-User-Name"]).toBe(encodeURIComponent("境川章一郎"));
+    // Every value must survive a fetch() ByteString conversion (ISO-8859-1).
+    for (const v of Object.values(headers)) {
+      expect([...v].every((c) => c.charCodeAt(0) <= 0xff)).toBe(true);
+    }
+  });

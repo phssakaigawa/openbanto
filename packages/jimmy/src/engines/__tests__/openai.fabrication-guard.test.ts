@@ -251,3 +251,107 @@ describe("OpenAiEngine fabrication guard integration", () => {
     expect(result.executedToolCalls).toEqual([{ name: "provisioner__check_provision", ok: true }]);
   });
 });
+
+// ---- No-tools fallback guard (#594 follow-up) ------------------------------
+// When MCP servers are configured but none connect (e.g. a header the fetch
+// ByteString conversion rejects), the turn falls back to plain streaming with
+// no tool loop at all — the guard must still mark fabricated "work done" prose.
+
+import { noToolsGuardNote } from "../openai.js";
+
+function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  let i = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]));
+      else controller.close();
+    },
+  });
+}
+function sseData(obj: unknown): string {
+  return `data: ${JSON.stringify(obj)}\n\n`;
+}
+
+describe("noToolsGuardNote", () => {
+  it("flags completion claims", () => {
+    expect(noToolsGuardNote("provision_app の実行に成功しました。✅ 完了です。")).toContain(
+      "ツールに接続できず",
+    );
+  });
+  it("stays silent without completion claims", () => {
+    expect(noToolsGuardNote("承知しました。どのように進めますか?")).toBeNull();
+    expect(noToolsGuardNote("")).toBeNull();
+  });
+});
+
+describe("OpenAiEngine no-tools fallback guard integration", () => {
+  beforeEach(() => {
+    tmpFiles.length = 0;
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const f of tmpFiles) {
+      try {
+        fs.unlinkSync(f);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  it("marks a fabricated report when MCP was configured but zero tools connected", async () => {
+    const client = new FakeMcpClient([], {}); // server connects but yields no tools
+    const fabricated =
+      "provision_app を実行しました。✅ 受け入れ完了です。実行レシート: fake-001";
+    const responses: Response[] = [
+      new Response(
+        streamFromChunks([
+          sseData({ choices: [{ delta: { content: fabricated } }] }),
+          "data: [DONE]\n\n",
+        ]),
+        { status: 200 },
+      ),
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]));
+
+    const engine = new OpenAiEngine({
+      baseUrl: "https://x",
+      apiKey: "k",
+      model: "m",
+      name: "openai-notools",
+      bridgeDeps: fakeDeps(client),
+    });
+    const result = await engine.run({
+      prompt: "demo-app を受け入れて",
+      cwd: "/tmp",
+      sessionId: "nt1",
+      mcpConfigPath: writeConfig({ provisioner: { url: "https://mcp" } }),
+    });
+
+    expect(result.result).toContain(fabricated);
+    expect(result.result).toContain("ツールに接続できず");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("does not annotate a plain-chat session without MCP config", async () => {
+    const responses: Response[] = [
+      new Response(
+        streamFromChunks([
+          sseData({ choices: [{ delta: { content: "整理が完了しました。以上です。" } }] }),
+          "data: [DONE]\n\n",
+        ]),
+        { status: 200 },
+      ),
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]));
+
+    const engine = new OpenAiEngine({ baseUrl: "https://x", apiKey: "k", model: "m", name: "openai-plain" });
+    const result = await engine.run({ prompt: "まとめて", cwd: "/tmp", sessionId: "nt2" });
+
+    expect(result.result).toBe("整理が完了しました。以上です。");
+    expect(result.result).not.toContain("システム自動付記");
+  });
+});
