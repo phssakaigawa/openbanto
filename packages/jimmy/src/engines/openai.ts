@@ -276,6 +276,24 @@ export function fabricationGuardNote(
 }
 
 /**
+ * Fabrication guard for the NO-TOOLS fallback (#594 follow-up): when MCP
+ * servers are configured but none come up (connection failure, bad header,
+ * server down), the turn silently falls back to plain streaming — no tool
+ * loop, no summary round, no per-turn record — and a DeepSeek-class model
+ * happily "performs" the requested work in fiction (observed: a full invented
+ * onboarding report with a fake receipt). Returns a note when such a turn's
+ * text claims completed work; null otherwise.
+ */
+export function noToolsGuardNote(finalText: string): string | null {
+  if (!finalText.trim() || !COMPLETION_CLAIM_RE.test(finalText)) return null;
+  return (
+    "⚠️ 実行記録(システム自動付記): このターンではツールに接続できず、ツールは一度も実行されていません。" +
+    "本文で操作の実行・完了が報告されている場合、それはこのターンの実行結果ではありません。" +
+    "ツール接続の状態を管理者に確認してください。"
+  );
+}
+
+/**
  * Append a guard note to a reply while keeping a trailing `[[choices: …]]`
  * marker last — the Slack choice-buttons parser only recognizes the marker as
  * the final line, so the note must slot in before it, not after.
@@ -458,9 +476,14 @@ export class OpenAiEngine implements InterruptibleEngine {
     // MCP tool-call path: if a config file is supplied and yields tools, run the
     // non-streaming tool-call loop. Any setup failure falls back to plain chat.
     let bridge: McpToolBridge | undefined;
+    // True when the session HAS configured MCP servers — if none of them come
+    // up the plain-chat fallback below must still guard against the model
+    // narrating tool work it could not possibly have done (#594).
+    let toolsWereConfigured = false;
     try {
       const servers = readMcpServers(opts.mcpConfigPath);
       if (servers && Object.keys(servers).length > 0) {
+        toolsWereConfigured = true;
         bridge = this.bridgeFactory(this.bridgeDeps);
         this.liveBridges.set(sid, bridge);
         const n = await bridge.connect(servers);
@@ -489,7 +512,23 @@ export class OpenAiEngine implements InterruptibleEngine {
       if (bridge && bridge.hasTools()) {
         return await this.runToolLoop(opts, sid, ac, startedAt, history, userContent, bridge);
       }
-      return await this.runStreaming(opts, sid, ac, startedAt, history, userContent);
+      const res = await this.runStreaming(opts, sid, ac, startedAt, history, userContent);
+      if (toolsWereConfigured && res.result && !res.error && !ac.signal.aborted) {
+        // Tool-less fallback of a tool-worker session: cross-check the prose
+        // so a fabricated "work done" report never reaches the user unmarked.
+        const note = noToolsGuardNote(res.result);
+        if (note) {
+          logger.warn(
+            `[${this.name}] fabrication guard: MCP servers configured but no tools connected, yet the final text claims completed work — appending the no-tools record (session ${sid})`,
+          );
+          res.result = appendGuardNote(res.result, note);
+          onStream?.({ type: "text", content: `\n\n${note}` });
+          const h = this.transcripts.get(sid);
+          const last = h?.[h.length - 1];
+          if (last?.role === "assistant") last.content = res.result;
+        }
+      }
+      return res;
     } catch (e: unknown) {
       if (ac.signal.aborted) {
         return { sessionId: sid, result: "", error: "interrupted" };

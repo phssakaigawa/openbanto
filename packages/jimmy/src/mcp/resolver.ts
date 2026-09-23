@@ -225,16 +225,28 @@ function identityEnv(ctx?: McpSessionContext): Record<string, string> {
   return env;
 }
 
+/**
+ * HTTP header values must be ISO-8859-1: fetch throws a ByteString TypeError
+ * on e.g. a Japanese display name, which killed the ENTIRE MCP server
+ * connection and left the 職人 tool-less mid-conversation (#594 root cause —
+ * the model then fabricated the tool results it could not produce). Values
+ * that aren't header-safe are percent-encoded (RFC 3986); consumers that
+ * display the name can decodeURIComponent when they see a `%`.
+ */
+export function headerSafeValue(v: string): string {
+  return /^[\x20-\x7e]*$/.test(v) ? v : encodeURIComponent(v);
+}
+
 /** URL header keys the banto stamps onto every HTTP 職人 request. */
 function identityHeaders(ctx?: McpSessionContext): Record<string, string> {
   const headers: Record<string, string> = {};
   if (!ctx) return headers;
-  if (ctx.userId) headers["X-Banto-User-Id"] = ctx.userId;
-  if (ctx.userKey) headers["X-Banto-User-Key"] = ctx.userKey;
-  if (ctx.userName) headers["X-Banto-User-Name"] = ctx.userName;
-  if (ctx.connector) headers["X-Banto-Connector"] = ctx.connector;
-  if (ctx.channel) headers["X-Banto-Channel"] = ctx.channel;
-  if (ctx.thread) headers["X-Banto-Thread"] = ctx.thread;
+  if (ctx.userId) headers["X-Banto-User-Id"] = headerSafeValue(ctx.userId);
+  if (ctx.userKey) headers["X-Banto-User-Key"] = headerSafeValue(ctx.userKey);
+  if (ctx.userName) headers["X-Banto-User-Name"] = headerSafeValue(ctx.userName);
+  if (ctx.connector) headers["X-Banto-Connector"] = headerSafeValue(ctx.connector);
+  if (ctx.channel) headers["X-Banto-Channel"] = headerSafeValue(ctx.channel);
+  if (ctx.thread) headers["X-Banto-Thread"] = headerSafeValue(ctx.thread);
   return headers;
 }
 
