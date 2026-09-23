@@ -100,6 +100,27 @@ export class McpToolBridge {
   }
 
   /**
+   * Resolve a model-emitted tool name to a namespaced id known to the bridge.
+   * Accepts an exact namespaced id (`server__tool`) or a bare tool name
+   * (`tool`). Bare names are matched against the tool part; the first match
+   * wins. Returns null when nothing matches. Used by the engine's text-form
+   * tool-call fallback, where the model may drop the `server__` prefix.
+   */
+  resolveToolName(name: string): string | null {
+    const n = (name || "").trim();
+    if (!n) return null;
+    if (this.toolMap.has(n)) return n;
+    for (const [ns, entry] of this.toolMap) {
+      if (entry.tool === n) return ns;
+    }
+    const bare = n.includes(NS) ? n.slice(n.lastIndexOf(NS) + NS.length) : n;
+    for (const [ns, entry] of this.toolMap) {
+      if (entry.tool === bare) return ns;
+    }
+    return null;
+  }
+
+  /**
    * Connect to every server in `mcpServers`, list its tools, and build the
    * namespaced OpenAI tool set. A server that fails to connect or list is
    * warned about (name only — never its secrets) and skipped; the rest still

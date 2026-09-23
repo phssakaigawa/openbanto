@@ -555,4 +555,84 @@ describe("OpenAiEngine + MCP tool-calls", () => {
     expect(engine.isAlive("t4")).toBe(false);
     expect(client.closed).toBe(true);
   });
+
+  it("recovers a tool call emitted as fenced-JSON text (DeepSeek), executes it, and returns final text", async () => {
+    const client = new FakeMcpClient(
+      [{ name: "get_weather", description: "Get weather", inputSchema: { type: "object", properties: { city: { type: "string" } } } }],
+      { get_weather: { content: [{ type: "text", text: "sunny, 25C" }] } },
+    );
+    // Round 1: NO native tool_calls — the model prints a fenced ```json block
+    // with a BARE tool name (the exact failure mode seen with some DeepSeek gateways).
+    // Round 2: final answer.
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: 'get_weather を実行します。\n\n```json\n{\n  "tool": "get_weather",\n  "parameters": { "city": "Tokyo" }\n}\n```',
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "It is sunny, 25C in Tokyo." } }], usage: { prompt_tokens: 42 } }),
+        { status: 200 },
+      ),
+    ];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responses[call++]),
+    );
+    const engine = new OpenAiEngine({ baseUrl: "https://x", apiKey: "k", model: "m", name: "openai-tf", bridgeDeps: fakeDeps(client) });
+    const deltas: StreamDelta[] = [];
+    const result = await engine.run({
+      prompt: "weather in Tokyo?",
+      cwd: "/tmp",
+      sessionId: "t-textcall",
+      mcpConfigPath: writeConfig({ weather: { command: "srv", args: [] } }),
+      onStream: (d) => deltas.push(d),
+    });
+    // The bare text-form call was resolved to the namespaced tool and dispatched.
+    expect(client.callLog).toEqual([{ name: "get_weather", arguments: { city: "Tokyo" } }]);
+    // The raw fenced-JSON did NOT leak as the final answer.
+    expect(result.result).toBe("It is sunny, 25C in Tokyo.");
+    expect(result.error).toBeUndefined();
+    expect(deltas.some((d) => d.type === "tool_use" && d.toolName === "weather__get_weather")).toBe(true);
+    expect(deltas.some((d) => d.type === "tool_result")).toBe(true);
+    expect(deltas.filter((d) => d.type === "text").map((d) => d.content)).toEqual(["It is sunny, 25C in Tokyo."]);
+  });
+
+  it("does not misfire on a legitimate JSON answer that has no tool-name key", async () => {
+    const client = new FakeMcpClient([{ name: "get_weather", description: "Get weather", inputSchema: { type: "object", properties: {} } }], {});
+    const responses: Response[] = [
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: '結果です:\n\n```json\n{ "status": "ok", "count": 3 }\n```', tool_calls: null } }],
+          usage: { prompt_tokens: 10 },
+        }),
+        { status: 200 },
+      ),
+    ];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responses[call++]),
+    );
+    const engine = new OpenAiEngine({ baseUrl: "https://x", apiKey: "k", model: "m", name: "openai-tf2", bridgeDeps: fakeDeps(client) });
+    const result = await engine.run({
+      prompt: "give me json",
+      cwd: "/tmp",
+      sessionId: "t-jsonanswer",
+      mcpConfigPath: writeConfig({ weather: { command: "srv", args: [] } }),
+    });
+    // No tool executed; the JSON answer is returned verbatim.
+    expect(client.callLog).toEqual([]);
+    expect(result.result).toContain('"status": "ok"');
+  });
 });

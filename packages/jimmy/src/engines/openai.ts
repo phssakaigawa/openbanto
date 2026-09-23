@@ -228,6 +228,60 @@ export type ChatMessage =
   | { role: "assistant"; content: string | null; tool_calls: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
+/** A tool-call intent recovered from assistant *text* (not native tool_calls). */
+export interface TextToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+/**
+ * Some OpenAI-compatible deployments (notably certain DeepSeek gateways) emit
+ * tool calls as TEXT instead of the native `tool_calls` field — e.g. a fenced
+ * ```json {"tool":"x","parameters":{…}}``` block, a bare top-level JSON object,
+ * or a `<@functionary_tool_call>{…}</@functionary_tool_call>` wrapper. Left
+ * unhandled these leak to the user as raw text and the tool never runs. This
+ * complements stripToolCallMarkup (which handles the no-tools summary round):
+ * here, in the WITH-tools loop, we recover the intent so the call can execute.
+ *
+ * Conservative on purpose: only objects carrying a recognizable tool-name key
+ * (`tool`/`name`/`function`) are returned, so ordinary prose or a JSON answer
+ * the model legitimately returns is not misread as a tool call.
+ */
+export function parseTextToolCalls(content: string | null | undefined): TextToolCall[] {
+  if (!content) return [];
+  const out: TextToolCall[] = [];
+  const seen = new Set<string>();
+
+  const push = (obj: unknown): void => {
+    if (!obj || typeof obj !== "object") return;
+    const o = obj as Record<string, unknown>;
+    const name = (o.tool ?? o.name ?? o.function) as unknown;
+    if (typeof name !== "string" || !name.trim()) return;
+    const rawArgs = (o.parameters ?? o.arguments ?? o.args ?? o.input ?? {}) as unknown;
+    const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? (rawArgs as Record<string, unknown>) : {};
+    const key = `${name}:${JSON.stringify(args)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ name: name.trim(), args });
+  };
+
+  const snippets: string[] = [];
+  for (const m of content.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) snippets.push(m[1]);
+  for (const m of content.matchAll(/<@?functionary_tool_call>?\s*([\s\S]*?)<\/@?functionary_tool_call>?/gi)) snippets.push(m[1]);
+  for (const m of content.matchAll(/\{[\s\S]*?\}/g)) snippets.push(m[0]);
+
+  for (const s of snippets) {
+    const t = s.trim();
+    if (!t.startsWith("{")) continue;
+    try {
+      push(JSON.parse(t));
+    } catch {
+      /* not valid JSON — skip */
+    }
+  }
+  return out;
+}
+
 /** A single OpenAI chat.completion streaming chunk (only the fields we read). */
 interface ChatChunk {
   choices?: Array<{
@@ -537,6 +591,55 @@ export class OpenAiEngine implements InterruptibleEngine {
       const toolCalls = message?.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
+        // No native tool_calls. Before treating this as the final answer, check
+        // whether the model emitted tool calls as *text* (seen with DeepSeek).
+        // If any resolve to real tools, synthesize a tool-call turn, execute
+        // them, and loop again instead of leaking the raw JSON/markup to the user.
+        const recovered = parseTextToolCalls(message?.content)
+          .map((c) => ({ ns: bridge.resolveToolName(c.name), args: c.args }))
+          .filter((x): x is { ns: string; args: Record<string, unknown> } => x.ns !== null);
+        if (recovered.length > 0) {
+          logger.warn(`[${this.name}] recovered ${recovered.length} text-form tool call(s): ${recovered.map((r) => r.ns).join(", ")} (session ${sid})`);
+          const synthCalls: ToolCall[] = recovered.map((r, i) => ({
+            id: `text_${round}_${i}`,
+            type: "function",
+            function: { name: r.ns, arguments: JSON.stringify(r.args) },
+          }));
+          messages.push({ role: "assistant", content: null, tool_calls: synthCalls });
+          for (let i = 0; i < recovered.length; i++) {
+            if (ac.signal.aborted) return { sessionId: sid, result: "", error: "interrupted" };
+            const { ns, args } = recovered[i];
+            const callId = synthCalls[i].id;
+            onStream?.({ type: "status", content: `calling ${ns}…` } satisfies StreamDelta);
+            onStream?.({ type: "tool_use", content: ns, toolName: ns, toolId: callId } satisfies StreamDelta);
+            let toolResult: string;
+            const calledAt = Date.now();
+            let callThrew = false;
+            try {
+              toolResult = await bridge.callTool(ns, args);
+            } catch (e: unknown) {
+              const m = e instanceof Error ? e.message : String(e);
+              toolResult = `Error: tool "${ns}" failed: ${m.slice(0, 300)}`;
+              callThrew = true;
+            }
+            const callMs = Date.now() - calledAt;
+            const callOk = !callThrew && !toolResult.startsWith("Error:");
+            execLog.push({ name: ns, ok: callOk, ms: callMs });
+            const preview = toolResult.replace(/\s+/g, " ").slice(0, 120);
+            logger.info(`[${this.name}] tool ${ns} ${callOk ? "ok" : "FAILED"} in ${callMs}ms (${toolResult.length} chars, text-recovered) preview="${preview}" (session ${sid})`);
+            const stored = truncateToolResult(toolResult);
+            onStream?.({ type: "tool_result", content: stored, toolName: ns, toolId: callId } satisfies StreamDelta);
+            messages.push({ role: "tool", tool_call_id: callId, content: stored });
+            charsSinceUsage += stored.length + 100;
+          }
+          // Nudge the model to answer in prose now that the tools have run.
+          messages.push({
+            role: "system",
+            content: "The requested tools have been executed and their results are above. Answer the user in prose. Do not print tool-call JSON or code fences.",
+          });
+          continue;
+        }
+
         // Final answer: stream it out and finish.
         finalText = message?.content ?? "";
         if (finalText) onStream?.({ type: "text", content: finalText } satisfies StreamDelta);
