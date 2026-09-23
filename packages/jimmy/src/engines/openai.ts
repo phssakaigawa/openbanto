@@ -202,6 +202,92 @@ function buildExecReport(execLog: Array<{ name: string; ok: boolean; ms: number 
   );
 }
 
+/**
+ * Completion-claim markers for the fabrication guard: phrases a report uses to
+ * assert work HAS BEEN done (perfective), deliberately excluding intent/future
+ * forms ("実行します", "承知しました") so plan→approval turns don't trip it.
+ */
+const COMPLETION_CLAIM_RE =
+  /(?:実行|作成|登録|反映|配布|適用|設置|付与|発行|更新|削除)(?:に成功|済み|(?:を)?完了|しました)|成功しました|完了しました|✅|\b(?:success(?:fully)?|created|completed|applied|deployed|done)\b/i;
+
+/** How far (chars) a completion claim may sit from a tool-name mention and
+ *  still count as "claiming that tool ran". */
+const CLAIM_PROXIMITY_CHARS = 80;
+
+/**
+ * Fabrication guard (#594): DeepSeek-class models sometimes answer a request
+ * with a fully fabricated success report — tool-call JSON output and all —
+ * without ever emitting a tool call, so none of the summary-round anchoring
+ * fires and the invented report reaches the user as-is. The engine cannot stop
+ * the model from writing fiction, but it KNOWS the authoritative execution
+ * record, so it can co-report the facts. Returns a note to append when the
+ * final text claims completion of an available tool that never executed this
+ * turn (name mention with a completion claim nearby), or claims completion in
+ * a turn where no tool ran at all. Returns null when nothing looks off.
+ * The note only states the per-turn record — it never asserts the prose is
+ * wrong — so a rare false positive reads as harmless bookkeeping.
+ */
+export function fabricationGuardNote(
+  finalText: string,
+  availableToolNames: string[],
+  execLog: Array<{ name: string; ok: boolean }>,
+): string | null {
+  if (!finalText.trim() || availableToolNames.length === 0) return null;
+
+  const executed = new Set<string>();
+  for (const c of execLog) {
+    executed.add(c.name);
+    const bare = c.name.includes("__") ? c.name.slice(c.name.indexOf("__") + 2) : c.name;
+    executed.add(bare);
+  }
+
+  const claimed: string[] = [];
+  for (const ns of availableToolNames) {
+    const bare = ns.includes("__") ? ns.slice(ns.indexOf("__") + 2) : ns;
+    if (executed.has(ns) || executed.has(bare)) continue;
+    for (let i = finalText.indexOf(bare); i >= 0; i = finalText.indexOf(bare, i + bare.length)) {
+      const window = finalText.slice(Math.max(0, i - CLAIM_PROXIMITY_CHARS), i + bare.length + CLAIM_PROXIMITY_CHARS);
+      if (COMPLETION_CLAIM_RE.test(window)) {
+        claimed.push(bare);
+        break;
+      }
+    }
+  }
+
+  if (claimed.length === 0) {
+    if (execLog.length > 0 || !COMPLETION_CLAIM_RE.test(finalText)) return null;
+    return (
+      "⚠️ 実行記録(システム自動付記): この応答のターンでツールは一度も実行されていません。" +
+      "本文で操作の実行・完了が報告されている場合、それはこのターンの実行結果ではありません。" +
+      "実際の状態は読み取り系ツールで確認してください。"
+    );
+  }
+
+  const record =
+    execLog.length > 0
+      ? "このターンで実際に実行されたツールは次のみです:\n" +
+        execLog.slice(-30).map((c) => `- ${c.name}: ${c.ok ? "成功" : "失敗"}`).join("\n")
+      : "このターンでツールは一度も実行されていません。";
+  return (
+    `⚠️ 実行記録(システム自動付記): 本文中の ${claimed.join(", ")} はこのターンで実行されていません。` +
+    "実行結果として示されている内容は実機に反映されていない可能性があります。\n" +
+    record
+  );
+}
+
+/**
+ * Append a guard note to a reply while keeping a trailing `[[choices: …]]`
+ * marker last — the Slack choice-buttons parser only recognizes the marker as
+ * the final line, so the note must slot in before it, not after.
+ */
+export function appendGuardNote(finalText: string, note: string): string {
+  const m = finalText.match(/(?:^|\n)\s*\[\[\s*choices\s*[:：][^\]\n]*\]\]\s*$/i);
+  if (m && typeof m.index === "number") {
+    return `${finalText.slice(0, m.index).trimEnd()}\n\n${note}\n${finalText.slice(m.index).trim()}`;
+  }
+  return `${finalText.trimEnd()}\n\n${note}`;
+}
+
 /** One tool_call as returned by a non-streaming chat.completions response. */
 interface ToolCall {
   id: string;
@@ -819,6 +905,21 @@ export class OpenAiEngine implements InterruptibleEngine {
           // never let this surface as a successful completion.
           turnError = `all ${execLog.length} tool call(s) failed`;
         }
+      }
+    }
+
+    if (finalText && !summaryRoundUsed && !turnError && !ac.signal.aborted) {
+      // Fabrication guard (#594): an organic completion skipped every
+      // summary-round anchor, so cross-check its claims against the
+      // authoritative execution record and co-report the facts on mismatch.
+      const toolNames = tools.map((t) => t.function?.name).filter((n): n is string => !!n);
+      const note = fabricationGuardNote(finalText, toolNames, execLog);
+      if (note) {
+        logger.warn(
+          `[${this.name}] fabrication guard: final text claims work the execution record does not back (${execLog.length} call(s) ran) — appending the per-turn record (session ${sid})`,
+        );
+        finalText = appendGuardNote(finalText, note);
+        onStream?.({ type: "text", content: `\n\n${note}` } satisfies StreamDelta);
       }
     }
 
