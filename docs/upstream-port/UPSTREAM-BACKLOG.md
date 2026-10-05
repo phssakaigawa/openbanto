@@ -5,7 +5,7 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 衝突リスクは各コミットの変更ファイルを [BANTO-PORT-PLAN.md](./BANTO-PORT-PLAN.md) の独自変更ファイル群と機械照合した結果。
 週次の新着は「OpenRyoko上流ウォッチ」ルーチンが Slack DM で通知する — 本書は初期在庫、以後の増分はルーチン側。
 
-最終棚卸し: 2026-09-28(上流 2026.9.27 = 5c15a70 時点)
+最終棚卸し: 2026-10-05(上流 2026.10.2 = 3ce248b 時点)
 
 ## 優先度P1 — 小さく効く(すぐ取り込み推奨)
 
@@ -65,6 +65,19 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 | PR#88 (1f64138, 09-21) | 2026.9.22リリース準備(リリースノート・StopFailure猶予テストのfake timer化) | 低 — OpenRyoko自身のリリース作業 | 低 | 不要 |
 
 進行中(open PR、参考・台帳には追記しない): **PR#92**「Slackリアクションをチャンネル単位でトリアージから除外(`reactionPassthrough`)」— 2026.9.23のJev native triage(PR#85)導入でcron/スクリプト投稿の承認カードへのリアクションが誤って「軽い反応」判定される問題への対処。**PR#85取り込み時はこのフォローも合わせて要確認**(connectors/slack/index.ts、HIGH想定)。
+
+### 2026-10-05(上流 2026.10.2 = 3ce248b 時点)
+
+前回棚卸し(5c15a70, 09-27)以降 main に入った6コミット(直近7日、2026-09-30〜10-02にマージ)。PRタイトル/本文は GitHub API で取得。実質的な変更は3件(#97/#98/#99)、#100はバージョン表示のみの公開作業。
+
+| 上流コミット(PR) | 内容 | 価値 | 衝突リスク | 推奨 |
+|---|---|---|---|---|
+| PR#97 (7140fd7, 09-30) | Agents View Canvas の無限リトライ修正(`missing_scope`/`channel_not_found` をCanvas削除と誤判定しない・チャンネル指定時の同名Canvas誤採用経路を削除)+Manifest再インストール等のセットアップ手順を設定画面/READMEに追記 | 低 — Canvas未使用(既存の「不要」判定(3704395 free_team)と同根) | 中(`packages/web/src/app/settings/page.tsx`、IBM Bob設定セクションと同ファイル) | 不要 |
+| PR#98 (da3e512, 09-30) | better-sqlite3 を`^11.8.0`→N-API版`^13.0.3`に更新しNode 24での`Statement::~Statement()`クラッシュを回避+Slackの空ターン(応答なし会話)バグ修正、Node24.21 CI追加 | 高 — Node24環境での実クラッシュ・空応答バグの修正 | **HIGH**(`connectors/slack/index.ts`) | P2(HIGHリスクのためチェックリスト要全走。Node24未運用なら緊急性は下がるが空ターン修正は独立に有用) |
+| PR#99 (e54dd63, 10-02) | `slack.triage.jev.endpoint`を追加し、Jev空気読みの判定先をローカルのOllama等判定モデル(ループバック`/v1/systemone`限定)に向けられるように。既定はTypeSafeのまま、ループバックではAPIキー非送信 | 中 — オプトインの将来性機能。現状TypeSafe運用なら緊急性低 | **HIGH**(`shared/types.ts`) | P3 |
+| PR#100 (85c8bf8, 10-02) | OpenRyoko 2026.10.2リリース(バージョン・CHANGELOGのみ、#99の公開作業) | — | 低 | 不要 |
+
+進行中(open PR、参考・台帳には追記しない): 新規のopen PRはなし。**PR#92**(上記)は引き続きopenで変化なし。
 
 ## 取り込み時の手順(共通)
 
