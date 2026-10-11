@@ -36,6 +36,7 @@ import type { Guardrail, GuardrailContext } from "../guardrails/registry.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isEmptyOrTimeoutResult, isInteractiveTurnTimeout, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
+import { guardDateClaims } from "../shared/dates.js";
 import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
 import { checkBudget } from "../gateway/budgets.js";
@@ -550,6 +551,7 @@ export class SessionManager {
           channel: target.channel,
           thread: target.thread || target.messageTs,
           ...speakerIdentity,
+          timezone: (meta.speakerTz as string) || this.config.portal?.timezone,
         });
         if (Object.keys(mcpConfig.mcpServers).length > 0) {
           mcpConfigPath = writeMcpConfigFile(mcpConfig, session.id);
@@ -1361,6 +1363,22 @@ export class SessionManager {
         } finally {
           clearInterval(heartbeat);
         }
+      }
+
+      // Date grounding (#654): correct "本日/明日/昨日 … YYYY-MM-DD" claims that
+      // contradict the gateway clock before the reply is stored or delivered.
+      {
+        const tz = ((msg.transportMeta ?? {}) as Record<string, unknown>).speakerTz as string | undefined
+          || this.config.portal?.timezone;
+        const fix = (t: string) => {
+          const g = guardDateClaims(t, new Date(), tz);
+          if (g.fixes.length > 0) {
+            logger.warn(`[date-guard] session ${session.id}: corrected ${g.fixes.map((f) => `${f.label} ${f.wrong}→${f.correct}`).join(", ")}`);
+          }
+          return g.text;
+        };
+        if (result.result) result.result = fix(result.result);
+        if (result.turns) result.turns = result.turns.map((t) => (typeof t === "string" ? fix(t) : t));
       }
 
       const responseText = result.result?.trim()

@@ -36,6 +36,8 @@ export interface McpSessionContext {
    * than invoked by the LLM. Never set for engine turns.
    */
   via?: string;
+  /** IANA zone used by the built-in datetime server (speaker tz → portal tz → Asia/Tokyo). */
+  timezone?: string;
 }
 
 /**
@@ -75,6 +77,11 @@ export function resolveMcpServers(
     // Employee gets all enabled servers (default behavior, or mcp: true)
     Object.assign(servers, available);
   }
+
+  // Date grounding (#654): the datetime server is attached to every session
+  // that has MCP at all — including employees with an explicit server list —
+  // because no 職人 should ever guess what "明日" means.
+  if (available.datetime && !servers.datetime) servers.datetime = available.datetime;
 
   return { mcpServers: servers };
 }
@@ -173,6 +180,27 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
     servers.knowledge = {
       command: "node",
       args: [scriptPath],
+    };
+  }
+
+  // Datetime MCP server (built-in, deterministic date tools — #654). Default ON.
+  if (config.datetime?.enabled !== false) {
+    const distPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "..",
+      "..",
+      "dist",
+      "src",
+      "mcp",
+      "datetime-server.js",
+    );
+    const scriptPath = fs.existsSync(distPath)
+      ? distPath
+      : path.resolve(path.dirname(new URL(import.meta.url).pathname), "datetime-server.js");
+    servers.datetime = {
+      command: "node",
+      args: [scriptPath],
+      env: { JINN_TIMEZONE: sessionContext?.timezone || "Asia/Tokyo" },
     };
   }
 
