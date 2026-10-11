@@ -1,4 +1,5 @@
 import http from "node:http";
+import { callMcpToolDirect, isFormAllowed } from "../mcp/direct-call.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -458,6 +459,20 @@ export async function startGateway(
           // skip every bot message despite the value being present in config.yaml.
           allowBotsInChannels: c.slack.allowBotsInChannels,
           actionHooks: c.slack.actionHooks,
+          // Modal forms: allowlist + direct 職人 call, resolved against the
+          // live config so mcp.custom.<server>.forms edits apply on reload.
+          forms: {
+            allowed: (server: string, form: string) => isFormAllowed(cfg.mcp, server, form),
+            call: (server: string, tool: string, args: Record<string, unknown>, id: { userId: string; userName?: string; connector: string; channel: string; thread?: string }) =>
+              callMcpToolDirect(cfg.mcp, server, tool, args, {
+                userId: id.userId,
+                userKey: id.userId,
+                userName: id.userName,
+                connector: id.connector,
+                channel: id.channel,
+                thread: id.thread,
+              }),
+          },
           goalExtraction: c.slack.goalExtraction,
           agentsCanvas: c.slack.agentsCanvas,
         },

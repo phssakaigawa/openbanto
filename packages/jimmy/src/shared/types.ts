@@ -337,6 +337,12 @@ export interface McpServerUrlConfig {
   url: string;
   /** Optional headers for authentication */
   headers?: Record<string, string>;
+  /**
+   * Slack modal forms this 職人 may serve (ids passed to its `get_form` tool).
+   * Opt-in allowlist for [[form: <server>/<id>]] markers. Stripped before the
+   * config is handed to engines.
+   */
+  forms?: string[];
 }
 
 /** MCP server config — either stdio (command) or URL-based */
@@ -457,6 +463,19 @@ export interface SlackActionHook {
   timeoutMs?: number;
 }
 
+/** Gateway-provided hooks for Slack modal forms (see SlackConnectorConfig.forms). */
+export interface SlackFormsBridge {
+  /** Whether `form` on MCP server `server` is enabled (mcp.custom.<server>.forms). */
+  allowed(server: string, form: string): boolean;
+  /** Call `server.tool(args)` as the given Slack user; `ok=false` when the tool reported isError. */
+  call(
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    identity: { userId: string; userName?: string; connector: string; channel: string; thread?: string },
+  ): Promise<{ ok: boolean; text: string }>;
+}
+
 export interface SlackConnectorConfig {
   /** Unique instance identifier (e.g. "slack-support") */
   id?: string;
@@ -482,6 +501,13 @@ export interface SlackConnectorConfig {
    * bespoke per-app code. Requires the Slack app to have Interactivity enabled.
    */
   actionHooks?: Record<string, SlackActionHook>;
+  /**
+   * Modal forms ([[form: server/form]] marker, see connectors/slack/forms.ts).
+   * Injected by the gateway at wiring time (not read from config.yaml): the
+   * allowlist check and the direct 職人 tool call. Absent → markers are left
+   * as plain text and no form handlers are registered.
+   */
+  forms?: SlackFormsBridge;
   /** Deterministic per-scope response gate (DM / group DM / channel). */
   respondTo?: SlackRespondToConfig;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */

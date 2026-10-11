@@ -201,6 +201,12 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 
 ---
 
+### Slack モーダルフォーム（`[[form: <server>/<form>]]`）
+- **目的**: 選択肢・日付・確認→送信を LLM に任せずソフトウェアで決定的に行う入力フォーム。職人が `get_form` でフォーム仕様（項目/選択肢/既定値/送信先ツール）を返し、番頭は Block Kit モーダルに描画するだけ。送信値は LLM を経由せず送信先ツールへそのまま渡る（確認内容＝送信内容）。
+- **file**: `connectors/slack/forms.ts`（新規・純関数: マーカー解析/モーダル生成/値抽出）、`connectors/slack/index.ts`（`sendMessage`/`replyMessage` のマーカー処理、`registerFormHandlers`: `banto_form_open` → loading modal → `views.update`、`banto_form_submit` → 送信先ツール → 結果をスレッド投稿、失敗時は入力保持の「修正して再送信」）、`mcp/direct-call.ts`（新規: `resolveMcpServers` + `McpToolBridge` で職人ツールを押下者 identity で直接呼ぶ、`isFormAllowed`）、`shared/types.ts`（`SlackFormsBridge`、`SlackConnectorConfig.forms`、`McpServerUrlConfig.forms`）、`mcp/resolver.ts`（`forms` をエンジンに渡さない）、`gateway/server.ts`（slack 配線で `forms` bridge 注入）。
+- **設定**: `mcp.custom.<server>.forms: ["<formId>"]`（opt-in allowlist。無いマーカーは無視）。
+- **★デグレ源**: server.ts の slack connectorConfig 明示列挙に `forms` が無いと機能がサイレントに無効（`actionHooks`/`respondTo` と同じ罠）。resolver の `forms` 除去が無いとエンジン設定に未知キーが混入。
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先
