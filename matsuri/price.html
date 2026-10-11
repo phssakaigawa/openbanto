@@ -24,10 +24,12 @@ body {
 header { text-align: center; padding-top: 36mm; }
 .sub { display: inline-block; background: #e8483b; color: #fff; font-size: 11mm; font-weight: 900;
   padding: 2mm 12mm; border-radius: 20mm; letter-spacing: 1.5mm; }
-h1 { font-family: "Mochiy Pop One", sans-serif; font-weight: 400; font-size: 30mm; line-height: 1.2;
-  color: #e8483b; margin-top: 4mm; letter-spacing: 2mm;
+h1 { font-family: "Mochiy Pop One", sans-serif; font-weight: 400; font-size: 23mm; line-height: 1.2;
+  color: #e8483b; margin-top: 4mm; letter-spacing: 0.5mm; white-space: nowrap;
   text-shadow: 1.6mm 1.6mm 0 #f6c343, -0.5mm -0.5mm 0 #fff, 0.5mm -0.5mm 0 #fff; }
 h1 .emo { font-size: 24mm; vertical-align: 4mm; }
+.year { font-family: "Mochiy Pop One"; font-size: 13mm; color: #4a2c1a; letter-spacing: 3mm; margin-top: 1mm; }
+.year::before, .year::after { content: "★"; color: #f6a623; font-size: 8mm; margin: 0 4mm; vertical-align: 2mm; }
 .section-title { display: flex; align-items: center; justify-content: center; gap: 5mm;
   font-family: "Mochiy Pop One"; font-size: 13mm; color: #fff; margin: 0 auto 6mm; width: fit-content;
   background: #f08a24; padding: 2.5mm 14mm; border-radius: 4mm; position: relative;
@@ -45,7 +47,7 @@ h1 .emo { font-size: 24mm; vertical-align: 4mm; }
 .badge { position: absolute; top: -4.5mm; right: 8mm; background: #3b8fd9; color: #fff; font-size: 4.6mm;
   font-weight: 900; padding: 1mm 4mm; border-radius: 3mm; }
 .note { text-align: center; font-size: 5.5mm; font-weight: 700; margin-top: 4mm; color: #8a5a3c; }
-.games { margin: 12mm 22mm 0; background: #fff; border: 1.2mm dashed #e8483b; border-radius: 10mm; padding: 7mm 7mm 6mm; position: relative; }
+.games { margin: 13mm 22mm 0; background: #fff; border: 1.2mm dashed #e8483b; border-radius: 10mm; padding: 7mm 7mm 6mm; position: relative; }
 .games .section-title { position: absolute; top: -10mm; left: 50%; transform: translateX(-50%); margin: 0; background: #3fae6a; box-shadow: 0 1.5mm 0 #2b7f4c; white-space: nowrap; }
 .grow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; margin-top: 4mm; }
 .g { text-align: center; background: #fff3d6; border-radius: 7mm; padding: 4mm 2mm; }
@@ -78,7 +80,8 @@ h1 .emo { font-size: 24mm; vertical-align: 4mm; }
 
 <header>
   <div class="sub">模擬店 メニュー</div>
-  <h1>自治会まつり</h1>
+  <h1>御幸一自治会まつり</h1>
+  <div class="year">2026</div>
 </header>
 
 <div class="menu">
