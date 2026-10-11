@@ -457,7 +457,12 @@ export interface SlackRespondToConfig {
 
 /** A single Block Kit button handler (see SlackConnectorConfig.actionHooks). */
 export interface SlackActionHook {
-  /** Executable to spawn. The button's `value` is appended as the last argv. */
+  /**
+   * Executable to spawn. The button's `value` is appended as the last argv.
+   * The press context is passed as env: BANTO_ACTION_ID, BANTO_ACTION_USER_ID
+   * (presser's Slack user ID), BANTO_ACTION_CHANNEL, BANTO_ACTION_MESSAGE_TS,
+   * BANTO_ACTION_THREAD_TS.
+   */
   command: string;
   /** Optional fixed args placed before the button value. */
   args?: string[];

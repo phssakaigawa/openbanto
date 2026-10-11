@@ -213,6 +213,14 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 - **TZ**: 話者 Slack TZ → `portal.timezone` → Asia/Tokyo。週は月曜始まり。
 - **★デグレ源**: resolver の「employee の明示リストにも datetime を足す」処理が消えると職人だけ日付ツールを失う。
 
+### Slack actionHooks に押下者コンテキストを渡す
+- **目的**: `connectors.slack.actionHooks` のコマンドは従来ボタンの `value` しか受け取れず、「誰が押したか」で認可・担当者設定をする補助アプリ（例: 作業依頼カードの「受託」ボタン）が作れなかった。押下者と押下位置を環境変数で渡す。
+- **file**: `connectors/slack/action-hooks.ts`（新規・純関数: `extractActionHookContext(actionId, body)` / `buildActionHookEnv(ctx, baseEnv)`）、`connectors/slack/index.ts`（`app.action(actionId)` で ctx 抽出 → `runActionHook(..., ctx)` → `spawn(..., { env: buildActionHookEnv(ctx) })`）、`shared/types.ts`（`SlackActionHook.command` の doc）。
+- **env**: `BANTO_ACTION_ID` / `BANTO_ACTION_USER_ID`（押下者 Slack user ID）/ `BANTO_ACTION_CHANNEL` / `BANTO_ACTION_MESSAGE_TS` / `BANTO_ACTION_THREAD_TS`（ルート投稿なら message ts と同値）。値は Slack 署名済み interaction payload 由来。親プロセスから継承した `BANTO_ACTION_*` は捨ててから設定（なりすまし防止）。
+- **後方互換**: argv は従来どおり `[...args, value]`、stdout のスレッド投稿・👀→✅/❌ も不変。env を読まない既存フックはそのまま動く。
+- **テスト**: `connectors/slack/__tests__/action-hooks.test.ts`（payload 抽出・スレッド内押下・欠損耐性・stale env 除去・実 spawn で env 到達＋argv 不変）。
+- **★デグレ源**: 上流が action ハンドラや `runActionHook` の spawn を書き換えたら `env: buildActionHookEnv(ctx)` を再適用（消えるとフック側は押下者不明で受託等を拒否する）。
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先
