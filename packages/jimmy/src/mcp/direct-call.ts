@@ -37,7 +37,9 @@ export async function callMcpToolDirect(
   identity: McpSessionContext,
   opts: { timeoutMs?: number; bridgeFactory?: () => McpToolBridge } = {},
 ): Promise<DirectCallResult> {
-  const { mcpServers } = resolveMcpServers(globalMcp, undefined, identity);
+  // X-Banto-Via: form — lets a 職人 require that e.g. a create operation was
+  // confirmed by the user in a modal (engine turns never carry this header).
+  const { mcpServers } = resolveMcpServers(globalMcp, undefined, { ...identity, via: identity.via ?? "form" });
   const cfg = mcpServers[server];
   if (!cfg) return { ok: false, text: `MCP サーバ「${server}」は利用できません` };
 

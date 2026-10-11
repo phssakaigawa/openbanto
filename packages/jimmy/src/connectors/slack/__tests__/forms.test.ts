@@ -145,3 +145,14 @@ describe("isFormAllowed", () => {
     expect(isFormAllowed(undefined, "tickets", "work_request")).toBe(false);
   });
 });
+
+describe("X-Banto-Via header", () => {
+  it("is stamped only when via is set (form calls), never for plain engine turns", async () => {
+    const { resolveMcpServers } = await import("../../../mcp/resolver.js");
+    const mcp = { browser: { enabled: false }, gateway: { enabled: false }, knowledge: { enabled: false }, custom: { tickets: { type: "http", url: "https://x/mcp" } } } as any;
+    const turn = resolveMcpServers(mcp, undefined, { userId: "U1" }).mcpServers.tickets as any;
+    expect(turn.headers["X-Banto-Via"]).toBeUndefined();
+    const form = resolveMcpServers(mcp, undefined, { userId: "U1", via: "form" }).mcpServers.tickets as any;
+    expect(form.headers["X-Banto-Via"]).toBe("form");
+  });
+});

@@ -29,6 +29,13 @@ export interface McpSessionContext {
   userKey?: string;
   /** Human display name of the speaker (msg.user). */
   userName?: string;
+  /**
+   * How this call reached the 職人 when it did NOT come from an engine turn
+   * (e.g. "form" = a Slack modal submission). Sent as X-Banto-Via so a 職人
+   * can require that an operation was confirmed by the user in a form rather
+   * than invoked by the LLM. Never set for engine turns.
+   */
+  via?: string;
 }
 
 /**
@@ -248,6 +255,7 @@ function identityHeaders(ctx?: McpSessionContext): Record<string, string> {
   if (ctx.connector) headers["X-Banto-Connector"] = headerSafeValue(ctx.connector);
   if (ctx.channel) headers["X-Banto-Channel"] = headerSafeValue(ctx.channel);
   if (ctx.thread) headers["X-Banto-Thread"] = headerSafeValue(ctx.thread);
+  if (ctx.via) headers["X-Banto-Via"] = headerSafeValue(ctx.via);
   return headers;
 }
 
