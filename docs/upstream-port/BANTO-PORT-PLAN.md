@@ -201,6 +201,12 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 
 ---
 
+### 日付グラウンディング（#654）
+- **目的**: エンジンは現在日付を知らず、ツールが返した正しい日付すら転記時に改変する（観測: 「本日は 2025-10-12(月)」）。日付はソフトウェアで決定的に与える。
+- **file**: `shared/dates.ts`（新規・純関数: TZ 投影/日付演算/早見表/`resolveDateExpression`/`guardDateClaims`）、`mcp/datetime-server.ts`（新規・内蔵 stdio MCP: `resolve_date`/`current_datetime`）、`sessions/context.ts`（ESSENTIAL「## 現在日時」節を毎ターン注入）、`mcp/resolver.ts`（`datetime` サーバを既定 ON・明示 `mcp:[..]` の職人にも付与、`JINN_TIMEZONE`）、`sessions/manager.ts`・`gateway/api.ts`（返信の「本日/明日/昨日 … 日付」矛盾を補正＋注記）、`shared/types.ts`（`mcp.datetime`、`portal.timezone`）。
+- **TZ**: 話者 Slack TZ → `portal.timezone` → Asia/Tokyo。週は月曜始まり。
+- **★デグレ源**: resolver の「employee の明示リストにも datetime を足す」処理が消えると職人だけ日付ツールを失う。
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先

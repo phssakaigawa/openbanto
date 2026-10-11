@@ -367,6 +367,10 @@ export interface McpGlobalConfig {
   knowledge?: {
     enabled: boolean;
   };
+  /** Built-in deterministic date tools (resolve_date / current_datetime, #654). Default ON. */
+  datetime?: {
+    enabled: boolean;
+  };
   /**
    * Custom MCP servers defined by the user.
    * `employees`: if set, ONLY the named employees receive this server — the
@@ -562,6 +566,8 @@ export interface PortalConfig {
    *  nickname alone can't be matched to the operator's platform profile. */
   operatorAliases?: string[];
   language?: string;
+  /** IANA zone for date grounding when the speaker's zone is unknown (default Asia/Tokyo). */
+  timezone?: string;
   onboarded?: boolean;
 }
 

@@ -1,6 +1,7 @@
 import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import http from "node:http";
 import crypto from "node:crypto";
+import { guardDateClaims } from "../shared/dates.js";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
@@ -2790,6 +2791,7 @@ async function runWebSession(
           speakerName: typeof speakerMeta.speakerName === "string" ? speakerMeta.speakerName : undefined,
         }),
         userName: typeof speakerMeta.speakerName === "string" ? speakerMeta.speakerName : "web-user",
+        timezone: (typeof speakerMeta.speakerTz === "string" ? speakerMeta.speakerTz : undefined) || config.portal?.timezone,
       });
       if (Object.keys(mcpConfig.mcpServers).length > 0) {
         mcpConfigPath = writeMcpConfigFile(mcpConfig, currentSession.id);
@@ -3242,6 +3244,19 @@ async function runWebSession(
           logger.info(`Skipping completion for web session ${currentSession.id} deleted during auto-continuation`);
           return;
         }
+      }
+    }
+
+    // Date grounding (#654): fix contradicting "本日/明日/昨日 … date" claims.
+    if (result.result) {
+      const g = guardDateClaims(
+        result.result,
+        new Date(),
+        (typeof speakerMeta.speakerTz === "string" ? speakerMeta.speakerTz : undefined) || config.portal?.timezone,
+      );
+      if (g.fixes.length > 0) {
+        logger.warn(`[date-guard] web session ${currentSession.id}: corrected ${g.fixes.map((f) => `${f.label} ${f.wrong}→${f.correct}`).join(", ")}`);
+        result.result = g.text;
       }
     }
 

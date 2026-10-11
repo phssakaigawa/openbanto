@@ -8,6 +8,7 @@ import { buildServiceRegistry } from "../gateway/services.js";
 import { findJobsNeedingAttention } from "../jobs/state.js";
 import { resolveEngineConfig } from "../engines/registry.js";
 import { employeeVisibleInChannel } from "../shared/employee-access.js";
+import { buildDateContext } from "../shared/dates.js";
 
 /**
  * Token budget strategy:
@@ -222,6 +223,15 @@ export function buildContext(opts: {
     marker: "## Current session",
     content: buildSessionContext({ ...opts, sessionId: opts.sessionId, operatorName, speakerIsOperator }),
     summary: "", // always included, no trimming
+  });
+
+  // ── ESSENTIAL: Current date (#654) ──────────────────────────
+  // Rebuilt every turn from the gateway clock; engines must not guess dates.
+  sections.push({
+    tier: Tier.ESSENTIAL,
+    marker: "## 現在日時",
+    content: buildDateContext(new Date(), opts.speakerTz || opts.config?.portal?.timezone),
+    summary: "", // always included
   });
 
   // ── ESSENTIAL: Process lifetime (background tasks die with the process) ──
