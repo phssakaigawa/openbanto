@@ -29,6 +29,13 @@ export interface McpSessionContext {
   userKey?: string;
   /** Human display name of the speaker (msg.user). */
   userName?: string;
+  /**
+   * How this call reached the 職人 when it did NOT come from an engine turn
+   * (e.g. "form" = a Slack modal submission). Sent as X-Banto-Via so a 職人
+   * can require that an operation was confirmed by the user in a form rather
+   * than invoked by the LLM. Never set for engine turns.
+   */
+  via?: string;
 }
 
 /**
@@ -173,7 +180,8 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
   if (config.custom) {
     for (const [name, serverConfig] of Object.entries(config.custom)) {
       if (serverConfig.enabled === false) continue;
-      const { enabled, employees, ...rest } = serverConfig;
+      // `forms` is gateway-only (Slack modal allowlist) — never hand it to engines.
+      const { enabled, employees, forms: _forms, ...rest } = serverConfig as typeof serverConfig & { forms?: string[] };
 
       // Employee-scoped custom server: only the named employees receive it.
       // The default (no-employee) persona never sees its tools, so the
@@ -247,6 +255,7 @@ function identityHeaders(ctx?: McpSessionContext): Record<string, string> {
   if (ctx.connector) headers["X-Banto-Connector"] = headerSafeValue(ctx.connector);
   if (ctx.channel) headers["X-Banto-Channel"] = headerSafeValue(ctx.channel);
   if (ctx.thread) headers["X-Banto-Thread"] = headerSafeValue(ctx.thread);
+  if (ctx.via) headers["X-Banto-Via"] = headerSafeValue(ctx.via);
   return headers;
 }
 

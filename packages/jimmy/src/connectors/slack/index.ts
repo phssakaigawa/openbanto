@@ -33,6 +33,24 @@ import {
   buildChosenBlocks,
   parseChoiceMarker,
 } from "./choice-buttons.js";
+import {
+  FORM_OPEN_ACTION_ID,
+  FORM_SUBMIT_CALLBACK_ID,
+  buildErrorView,
+  buildFormLauncherBlocks,
+  buildFormView,
+  buildLoadingView,
+  extractFormValues,
+  parseFormMarker,
+  parseFormMeta,
+  parseFormSpec,
+  parseLaunchRef,
+  summarizeSubmission,
+  type FormLaunchRef,
+  type FormSpec,
+} from "./forms.js";
+import type { SlackFormsBridge } from "../../shared/types.js";
+import { randomUUID } from "node:crypto";
 import { startsWithSlashCommand } from "../../sessions/manager.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
@@ -83,6 +101,15 @@ export class SlackConnector implements Connector {
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   /** Choice-buttons messages already pressed (double-press guard; bounded). */
   private pressedChoiceMessages = new Set<string>();
+  /** Modal forms bridge (gateway-injected). Null → [[form:]] markers stay plain text. */
+  private readonly forms: SlackFormsBridge | null;
+  /** view.id → spec of an open form (labels for the submission echo). Bounded. */
+  private openFormSpecs = new Map<string, FormSpec>();
+  /** view.id of submissions already processed (double-submit guard). Bounded. */
+  private submittedFormViews = new Set<string>();
+  /** Draft values kept after a failed submit so "修正して再送信" can prefill. */
+  private formDrafts = new Map<string, { userId: string; values: Record<string, string>; exp: number }>();
+  private static readonly FORM_DRAFT_TTL_MS = 30 * 60 * 1000;
   private readonly triageConfig: SlackTriageConfig | undefined;
   private readonly respondTo: SlackRespondToConfig | undefined;
   private readonly goalExtractionConfig: SlackGoalExtractionConfig | undefined;
@@ -229,6 +256,7 @@ export class SlackConnector implements Connector {
       config.actionHooks && Object.keys(config.actionHooks).length > 0
         ? config.actionHooks
         : null;
+    this.forms = config.forms ?? null;
     this.triageConfig = config.triage;
     this.respondTo = config.respondTo;
     this.goalExtractionConfig = config.goalExtraction;
@@ -846,6 +874,8 @@ export class SlackConnector implements Connector {
       this.handler(msg);
     });
 
+    if (this.forms) this.registerFormHandlers(this.forms);
+
     this.app.event("reaction_added", async ({ event }) => {
       // Only handle reactions on messages (not files, etc.)
       if (event.item.type !== "message") return;
@@ -1048,9 +1078,13 @@ export class SlackConnector implements Connector {
     if (thread) {
       return this.replyMessage({ ...target, thread }, text);
     }
+    // Trailing [[form: server/form]] marker → post the text, then a launcher
+    // button that opens a 職人-defined modal (see forms.ts).
+    const form = this.forms ? parseFormMarker(text) : null;
+    if (form) text = form.body;
     // Trailing [[choices: …]] marker → post the question text, then an
     // interactive buttons message (see choice-buttons.ts for the contract).
-    const parsed = parseChoiceMarker(text);
+    const parsed = form ? null : parseChoiceMarker(text);
     const chunks = formatResponse(parsed ? parsed.body : text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
@@ -1067,6 +1101,9 @@ export class SlackConnector implements Connector {
       // messages would (DM timeline stays the per-user session).
       lastTs = (await this.postChoiceButtons(target.channel, undefined, parsed.choices)) ?? lastTs;
     }
+    if (form && lastTs) {
+      lastTs = (await this.postFormLauncher(target.channel, undefined, { s: form.server, f: form.form })) ?? lastTs;
+    }
     // A newly-posted root message will be the thread_ts for any follow-up replies,
     // so mark its future thread as bot-engaged. Only relevant when tracking is on.
     if (lastTs && this.conversationTrackingEnabled()) {
@@ -1078,7 +1115,9 @@ export class SlackConnector implements Connector {
   async replyMessage(target: Target, text: string): Promise<string | undefined> {
     if (!text || !text.trim()) return undefined;
     const threadTs = target.thread || target.messageTs;
-    const parsed = parseChoiceMarker(text);
+    const form = this.forms ? parseFormMarker(text) : null;
+    if (form) text = form.body;
+    const parsed = form ? null : parseChoiceMarker(text);
     const chunks = formatResponse(parsed ? parsed.body : text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
@@ -1093,6 +1132,9 @@ export class SlackConnector implements Connector {
     if (parsed) {
       lastTs = (await this.postChoiceButtons(target.channel, threadTs, parsed.choices)) ?? lastTs;
     }
+    if (form) {
+      lastTs = (await this.postFormLauncher(target.channel, threadTs, { s: form.server, f: form.form })) ?? lastTs;
+    }
     // Record the thread the bot just replied in. Subsequent user replies in
     // this same thread will carry thread_ts === threadTs and bypass triage
     // and the respondTo mention gate. Only relevant when tracking is on.
@@ -1100,6 +1142,148 @@ export class SlackConnector implements Connector {
       this.conversations.recordBotInitiatedThread(target.channel, threadTs);
     }
     return lastTs;
+  }
+
+  /** Post the "フォームを開く" launcher for a [[form: …]] marker (or a reopen after a failed submit). */
+  private async postFormLauncher(
+    channel: string,
+    threadTs: string | undefined,
+    ref: FormLaunchRef,
+    label?: string,
+  ): Promise<string | undefined> {
+    if (!this.forms?.allowed(ref.s, ref.f)) {
+      logger.warn(`[slack] form marker for non-allowlisted ${ref.s}/${ref.f} ignored`);
+      return undefined;
+    }
+    try {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+        text: label ?? "フォームを開く",
+        blocks: buildFormLauncherBlocks(ref, label) as never,
+      });
+      return res.ts;
+    } catch (err) {
+      logger.warn(`[slack] form launcher post failed: ${this.formatSlackError(err)}`);
+      return undefined;
+    }
+  }
+
+  private putFormDraft(userId: string, values: Record<string, string>): string {
+    const now = Date.now();
+    for (const [k, v] of this.formDrafts) if (v.exp < now) this.formDrafts.delete(k);
+    const id = randomUUID();
+    this.formDrafts.set(id, { userId, values, exp: now + SlackConnector.FORM_DRAFT_TTL_MS });
+    return id;
+  }
+
+  /** Drafts are per-user: someone else pressing the reopen button gets a blank form. */
+  private takeFormDraft(id: string | undefined, userId: string): Record<string, string> {
+    if (!id) return {};
+    const d = this.formDrafts.get(id);
+    if (!d || d.exp < Date.now() || d.userId !== userId) return {};
+    return d.values;
+  }
+
+  private static remember<T>(m: Map<string, T> | Set<string>, key: string, val?: T): void {
+    if (m instanceof Map) m.set(key, val as T);
+    else m.add(key);
+    if (m.size > 500) {
+      const first = m.keys().next().value;
+      if (first !== undefined) m.delete(first);
+    }
+  }
+
+  /**
+   * Modal forms: launcher press → loading modal (grabs trigger_id inside
+   * Slack's 3s window) → get_form as the presser → views.update with the spec;
+   * submit → the spec's submitTool with the raw values as the submitter → the
+   * tool's text result in the originating thread. No LLM in this path.
+   */
+  private registerFormHandlers(forms: SlackFormsBridge): void {
+    this.app.action(FORM_OPEN_ACTION_ID, async ({ ack, body, client }) => {
+      await ack();
+      const b = body as any;
+      const ref = parseLaunchRef(String(b.actions?.[0]?.value ?? ""));
+      const userId: string | undefined = b.user?.id;
+      const channel: string | undefined = b.channel?.id ?? b.container?.channel_id;
+      const messageTs: string | undefined = b.message?.ts ?? b.container?.message_ts;
+      const threadTs: string | undefined = b.message?.thread_ts || messageTs;
+      const triggerId: string | undefined = b.trigger_id;
+      if (!ref || !userId || !channel || !triggerId) {
+        logger.warn(`[slack] form open with incomplete payload (user=${userId} channel=${channel})`);
+        return;
+      }
+      if (this.allowedUsers && !this.allowedUsers.has(userId)) return;
+      if (!forms.allowed(ref.s, ref.f)) {
+        logger.warn(`[slack] form open for non-allowlisted ${ref.s}/${ref.f} by ${userId}`);
+        return;
+      }
+      let viewId: string | undefined;
+      try {
+        const opened = await client.views.open({ trigger_id: triggerId, view: buildLoadingView() as never });
+        viewId = opened.view?.id;
+      } catch (err) {
+        logger.warn(`[slack] form views.open failed: ${this.formatSlackError(err)}`);
+        return;
+      }
+      if (!viewId) return;
+      logger.info(`[slack] form ${ref.s}/${ref.f} opened by ${userId} in ${channel} (thread=${threadTs ?? "-"})`);
+      const speaker = await this.resolveSpeakerInfo(userId);
+      const identity = { userId, userName: speaker?.name, connector: this.name, channel, thread: threadTs };
+      const res = await forms.call(ref.s, "get_form", { form: ref.f }, identity);
+      const parsed = res.ok ? parseFormSpec(res.text) : { error: res.text };
+      try {
+        if ("error" in parsed) {
+          await client.views.update({ view_id: viewId, view: buildErrorView(parsed.error) as never });
+          return;
+        }
+        const meta = { s: ref.s, f: ref.f, t: parsed.spec.submitTool, c: channel, th: threadTs };
+        const prefill = this.takeFormDraft(ref.d, userId);
+        await client.views.update({ view_id: viewId, view: buildFormView(parsed.spec, meta, prefill) as never });
+        SlackConnector.remember(this.openFormSpecs, viewId, parsed.spec);
+      } catch (err) {
+        logger.warn(`[slack] form views.update failed: ${this.formatSlackError(err)}`);
+      }
+    });
+
+    this.app.view(FORM_SUBMIT_CALLBACK_ID, async ({ ack, body, view, client }) => {
+      await ack(); // close the modal immediately; the result goes to the thread
+      const userId: string | undefined = (body as any).user?.id;
+      const meta = parseFormMeta(view.private_metadata);
+      if (!userId || !meta) return;
+      if (this.submittedFormViews.has(view.id)) return;
+      SlackConnector.remember(this.submittedFormViews, view.id);
+      if (!forms.allowed(meta.s, meta.f)) {
+        logger.warn(`[slack] form submit for non-allowlisted ${meta.s}/${meta.f} by ${userId}`);
+        return;
+      }
+      const values = extractFormValues((view.state?.values ?? {}) as Record<string, Record<string, any>>);
+      const spec = this.openFormSpecs.get(view.id);
+      this.openFormSpecs.delete(view.id);
+      const post = (text: string, blocks?: unknown[]) =>
+        client.chat
+          .postMessage({ channel: meta.c, ...(meta.th ? { thread_ts: meta.th } : {}), text, ...(blocks ? { blocks: blocks as never } : {}) })
+          .catch((err) => logger.warn(`[slack] form result post failed: ${this.formatSlackError(err)}`));
+
+      const echo = spec ? summarizeSubmission(spec, values) : "";
+      await post(`:inbox_tray: <@${userId}> がフォーム「${spec?.title ?? meta.f}」を送信しました${echo ? `
+${echo}` : ""}`);
+      logger.info(`[slack] form ${meta.s}/${meta.f} submitted by ${userId} → ${meta.s}.${meta.t}`);
+
+      const speaker = await this.resolveSpeakerInfo(userId);
+      const identity = { userId, userName: speaker?.name, connector: this.name, channel: meta.c, thread: meta.th };
+      const res = await forms.call(meta.s, meta.t, values, identity);
+      if (res.ok) {
+        await post(res.text);
+        return;
+      }
+      // Failed / refused: keep the values so the user can fix and resend.
+      const draft = this.putFormDraft(userId, values);
+      const text = `:warning: ${res.text}`;
+      await post(text);
+      await this.postFormLauncher(meta.c, meta.th, { s: meta.s, f: meta.f, d: draft }, "入力を修正して再送信");
+    });
   }
 
   /** Post the interactive buttons message for a parsed [[choices: …]] marker. */
