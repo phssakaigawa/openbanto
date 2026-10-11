@@ -201,6 +201,12 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 
 ---
 
+### Slack モーダルフォーム（`[[form: <server>/<form>]]`）
+- **目的**: 選択肢・日付・確認→送信を LLM に任せずソフトウェアで決定的に行う入力フォーム。職人が `get_form` でフォーム仕様（項目/選択肢/既定値/送信先ツール）を返し、番頭は Block Kit モーダルに描画するだけ。送信値は LLM を経由せず送信先ツールへそのまま渡る（確認内容＝送信内容）。
+- **file**: `connectors/slack/forms.ts`（新規・純関数: マーカー解析/モーダル生成/値抽出）、`connectors/slack/index.ts`（`sendMessage`/`replyMessage` のマーカー処理、`registerFormHandlers`: `banto_form_open` → loading modal → `views.update`、`banto_form_submit` → 送信先ツール → 結果をスレッド投稿、失敗時は入力保持の「修正して再送信」）、`mcp/direct-call.ts`（新規: `resolveMcpServers` + `McpToolBridge` で職人ツールを押下者 identity で直接呼ぶ、`isFormAllowed`）、`shared/types.ts`（`SlackFormsBridge`、`SlackConnectorConfig.forms`、`McpServerUrlConfig.forms`）、`mcp/resolver.ts`（`forms` をエンジンに渡さない）、`gateway/server.ts`（slack 配線で `forms` bridge 注入）。
+- **設定**: `mcp.custom.<server>.forms: ["<formId>"]`（opt-in allowlist。無いマーカーは無視）。
+- **★デグレ源**: server.ts の slack connectorConfig 明示列挙に `forms` が無いと機能がサイレントに無効（`actionHooks`/`respondTo` と同じ罠）。resolver の `forms` 除去が無いとエンジン設定に未知キーが混入。
+
 ### 日付グラウンディング（#654）
 - **目的**: エンジンは現在日付を知らず、ツールが返した正しい日付すら転記時に改変する（観測: 「本日は 2025-10-12(月)」）。日付はソフトウェアで決定的に与える。
 - **file**: `shared/dates.ts`（新規・純関数: TZ 投影/日付演算/早見表/`resolveDateExpression`/`guardDateClaims`）、`mcp/datetime-server.ts`（新規・内蔵 stdio MCP: `resolve_date`/`current_datetime`）、`sessions/context.ts`（ESSENTIAL「## 現在日時」節を毎ターン注入）、`mcp/resolver.ts`（`datetime` サーバを既定 ON・明示 `mcp:[..]` の職人にも付与、`JINN_TIMEZONE`）、`sessions/manager.ts`・`gateway/api.ts`（返信の「本日/明日/昨日 … 日付」矛盾を補正＋注記）、`shared/types.ts`（`mcp.datetime`、`portal.timezone`）。
