@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700;900&family=Mochiy+Pop+One&family=Noto+Color+Emoji&display=block" rel="stylesheet">
+<style>
+@page { size: A3 portrait; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 297mm; height: 420mm; }
+body {
+  font-family: "Zen Maru Gothic", sans-serif; color: #4a2c1a;
+  background: #fff8e7;
+  background-image: radial-gradient(#ffd9a0 2.2mm, transparent 2.4mm);
+  background-size: 22mm 22mm; position: relative; overflow: hidden;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.emo { font-family: "Noto Color Emoji"; font-weight: 400; }
+.frame { position: absolute; inset: 9mm; border: 3mm solid #e8483b; border-radius: 12mm;
+  box-shadow: inset 0 0 0 2mm #fff8e7, inset 0 0 0 3.2mm #f6a623; }
+/* bunting */
+.bunting { position: absolute; top: 9mm; left: 20mm; right: 20mm; height: 30mm; }
+.bunting svg { width: 100%; height: 100%; }
+/* lanterns */
+.lantern { position: absolute; top: 14mm; width: 26mm; }
+.lantern.l { left: 22mm; } .lantern.r { right: 22mm; }
+header { text-align: center; padding-top: 36mm; }
+.sub { display: inline-block; background: #e8483b; color: #fff; font-size: 11mm; font-weight: 900;
+  padding: 2mm 12mm; border-radius: 20mm; letter-spacing: 1.5mm; }
+h1 { font-family: "Mochiy Pop One", sans-serif; font-weight: 400; font-size: 30mm; line-height: 1.2;
+  color: #e8483b; margin-top: 4mm; letter-spacing: 2mm;
+  text-shadow: 1.6mm 1.6mm 0 #f6c343, -0.5mm -0.5mm 0 #fff, 0.5mm -0.5mm 0 #fff; }
+h1 .emo { font-size: 24mm; vertical-align: 4mm; }
+.section-title { display: flex; align-items: center; justify-content: center; gap: 5mm;
+  font-family: "Mochiy Pop One"; font-size: 13mm; color: #fff; margin: 0 auto 6mm; width: fit-content;
+  background: #f08a24; padding: 2.5mm 14mm; border-radius: 4mm; position: relative;
+  box-shadow: 0 1.5mm 0 #c9661a; }
+.menu { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm 6mm; padding: 0 22mm; margin-top: 5mm; }
+.card { background: #fff; border-radius: 8mm; border: 1.2mm solid #4a2c1a; padding: 3mm 5mm;
+  display: flex; align-items: center; gap: 3mm; box-shadow: 2mm 2mm 0 #4a2c1a; position: relative; min-height: 29mm; }
+.card .ic { font-size: 15mm; width: 22mm; height: 22mm; flex: none; display: grid; place-items: center;
+  border-radius: 50%; background: var(--c); }
+.card .nm { flex: 1; white-space: nowrap; font-size: 8.6mm; font-weight: 900; line-height: 1.15; }
+.card .nm small { display: block; font-size: 5.2mm; font-weight: 700; color: #a0715a; margin-top: 1mm; }
+.card .pr { font-family: "Mochiy Pop One"; font-size: 13mm; color: #e8483b; white-space: nowrap; }
+.card .pr span { font-size: 7.5mm; margin-right: 0.6mm; }
+.card.wide { grid-column: 1 / -1; }
+.badge { position: absolute; top: -4.5mm; right: 8mm; background: #3b8fd9; color: #fff; font-size: 4.6mm;
+  font-weight: 900; padding: 1mm 4mm; border-radius: 3mm; }
+.note { text-align: center; font-size: 5.5mm; font-weight: 700; margin-top: 4mm; color: #8a5a3c; }
+.games { margin: 12mm 22mm 0; background: #fff; border: 1.2mm dashed #e8483b; border-radius: 10mm; padding: 7mm 7mm 6mm; position: relative; }
+.games .section-title { position: absolute; top: -10mm; left: 50%; transform: translateX(-50%); margin: 0; background: #3fae6a; box-shadow: 0 1.5mm 0 #2b7f4c; white-space: nowrap; }
+.grow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; margin-top: 4mm; }
+.g { text-align: center; background: #fff3d6; border-radius: 7mm; padding: 4mm 2mm; }
+.g .emo { font-size: 12mm; display: block; }
+.g b { display: block; font-size: 7.5mm; font-weight: 900; margin-top: 1mm; }
+.free { display: inline-block; margin-top: 2mm; background: #e8483b; color: #fff; font-weight: 900; font-size: 6mm;
+  padding: 0.6mm 5mm; border-radius: 10mm; }
+.yokyo { display: flex; gap: 5mm; margin-top: 5mm; }
+.yokyo div { flex: 1; display: flex; align-items: center; gap: 3mm; background: #e7f5ec; border-radius: 7mm; padding: 3mm 5mm; }
+.yokyo .emo { font-size: 11mm; }
+.yokyo b { font-size: 7.5mm; font-weight: 900; display: block; line-height: 1.2; }
+.yokyo small { font-size: 5.5mm; font-weight: 700; color: #2b7f4c; }
+.foot { position: absolute; bottom: 16mm; left: 0; right: 0; text-align: center; font-size: 8mm; font-weight: 900; color: #e8483b; }
+</style></head><body>
+<div class="frame"></div>
+<div class="bunting"><svg viewBox="0 0 1000 120" preserveAspectRatio="none">
+  <path d="M0,10 Q500,70 1000,10" stroke="#4a2c1a" stroke-width="3" fill="none"/>
+  <g id="flags"></g></svg></div>
+<svg class="lantern l" viewBox="0 0 100 160"><use href="#lan"/></svg>
+<svg class="lantern r" viewBox="0 0 100 160"><use href="#lan"/></svg>
+<svg width="0" height="0" style="position:absolute"><defs><g id="lan">
+  <line x1="50" y1="0" x2="50" y2="18" stroke="#4a2c1a" stroke-width="3"/>
+  <rect x="28" y="16" width="44" height="12" rx="3" fill="#4a2c1a"/>
+  <ellipse cx="50" cy="80" rx="42" ry="54" fill="#e8483b"/>
+  <g stroke="#b8302a" stroke-width="2.5" fill="none"><ellipse cx="50" cy="80" rx="42" ry="40"/><ellipse cx="50" cy="80" rx="42" ry="22"/><line x1="8" y1="80" x2="92" y2="80"/></g>
+  <text x="50" y="95" font-size="40" text-anchor="middle" fill="#fff" font-family="Mochiy Pop One">祭</text>
+  <rect x="28" y="130" width="44" height="12" rx="3" fill="#4a2c1a"/>
+  <g stroke="#f6c343" stroke-width="3"><line x1="40" y1="142" x2="40" y2="158"/><line x1="50" y1="142" x2="50" y2="160"/><line x1="60" y1="142" x2="60" y2="158"/></g>
+</g></defs></svg>
+
+<header>
+  <div class="sub">模擬店 メニュー</div>
+  <h1>自治会まつり</h1>
+</header>
+
+<div class="menu">
+  <div class="card"><div class="ic emo" style="--c:#ffe1c2">🥢</div><div class="nm">焼きそば<small>1パック</small></div><div class="pr"><span>¥</span>200</div></div>
+  <div class="card"><div class="ic emo" style="--c:#ffe9b0">🍜</div><div class="nm">けんちんうどん<small>1杯</small></div><div class="pr"><span>¥</span>200</div></div>
+  <div class="card"><div class="ic emo" style="--c:#e3f2dd">🍙</div><div class="nm">おにぎり<small>2個入り</small></div><div class="pr"><span>¥</span>300</div></div>
+  <div class="card"><div class="ic emo" style="--c:#ffd6d0">🌭</div><div class="nm">フランクフルト<small>1本</small></div><div class="pr"><span>¥</span>100</div></div>
+  <div class="card"><div class="ic emo" style="--c:#ffe0f0">🍭</div><div class="nm">わたあめ<small>1つ</small></div><div class="pr"><span>¥</span>100</div></div>
+  <div class="card"><div class="ic emo" style="--c:#d9eefc">🥤</div><div class="nm">ソフトドリンク<small>1本</small></div><div class="pr"><span>¥</span>100</div></div>
+  <div class="card wide"><div class="badge">20歳以上の方のみ</div><div class="ic emo" style="--c:#fff0b3">🍺</div><div class="nm">生ビール<small>キンキンに冷えてます！</small></div><div class="pr"><span>¥</span>300</div></div>
+</div>
+<p class="note">※ なくなり次第終了となります。お早めにどうぞ！</p>
+
+<div class="games">
+  <div class="section-title"><span class="emo">🎉</span>ゲーム・余興<span class="emo">🎉</span></div>
+  <div class="grow">
+    <div class="g"><span class="emo">🎱</span><b>ビンゴゲーム</b><span class="free">参加無料</span></div>
+    <div class="g"><span class="emo">🎯</span><b>射的</b><span class="free">参加無料</span></div>
+    <div class="g"><span class="emo">⛳</span><b>ホールインワン</b><span class="free">参加無料</span></div>
+  </div>
+  <div class="yokyo">
+    <div><span class="emo">🪇</span><span><b>スコップ三味線</b><small>寿会のみなさん</small></span></div>
+    <div><span class="emo">💃</span><span><b>民謡踊り</b><small>みんなで踊ろう！</small></span></div>
+  </div>
+</div>
+<div class="foot">みなさまのお越しをお待ちしています♪</div>
+
+<script>
+const g = document.getElementById('flags'), cols = ['#e8483b','#f6c343','#3fae6a','#3b8fd9','#f08a24','#e46aa6'];
+for (let i = 0; i < 16; i++) {
+  const x = 15 + i * 62, t = x / 1000, y = 10 + 4 * 60 * t * (1 - t) * 1.0 * 0.5 * 2;
+  const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+  p.setAttribute('d', `M${x-24},${y} L${x+24},${y} L${x},${y+50} Z`);
+  p.setAttribute('fill', cols[i % cols.length]); g.appendChild(p);
+}
+</script>
+</body></html>
