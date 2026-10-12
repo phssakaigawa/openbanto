@@ -689,6 +689,18 @@ export interface EngineConfigBlock {
   [key: string]: unknown;
 }
 
+/** 暦（#668）: 日本の祝日データの定期取り込み。 */
+export interface CalendarConfig {
+  holidays?: {
+    /** 既定 true */
+    enabled?: boolean;
+    /** 既定: 内閣府 syukujitsu.csv */
+    url?: string;
+    /** 取り込み間隔（時間）。既定 24 */
+    refreshHours?: number;
+  };
+}
+
 export interface JinnConfig {
   jinn?: { version?: string };
   gateway: {
@@ -809,6 +821,7 @@ export interface JinnConfig {
     channel?: string;    // Discord channel ID for admin notifications
   };
   portal?: PortalConfig;
+  calendar?: CalendarConfig;
   /** Optional guardrail policy pack. Resolution order: `module` (external plugin
    *  specifier the registry dynamic-imports) → `impl` (built-in in-tree policy
    *  pack, e.g. `impl:"sample"`) → neither → built-in no-op "allow-all"

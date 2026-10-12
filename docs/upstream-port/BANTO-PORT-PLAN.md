@@ -221,6 +221,12 @@ engine / connector / guardrail の3プラグイン機構を **WebUI + gateway AP
 - **テスト**: `connectors/slack/__tests__/action-hooks.test.ts`（payload 抽出・スレッド内押下・欠損耐性・stale env 除去・実 spawn で env 到達＋argv 不変）。
 - **★デグレ源**: 上流が action ハンドラや `runActionHook` の spawn を書き換えたら `env: buildActionHookEnv(ctx)` を再適用（消えるとフック側は押下者不明で受託等を拒否する）。
 
+### 日本の祝日・六曜（#668）
+- **目的**: 祝日・営業日・六曜も LLM に推測させずソフトウェアで判定する。
+- **file**: `shared/jp-holidays.ts`（内閣府 syukujitsu.csv の解析・保存・判定、UTF-8/Shift_JIS 自動判別、範囲外は「不明」）、`shared/kyureki.ts`（Meeus の朔・太陽黄経による旧暦＝天保暦規則と六曜。2033年問題の期間は ambiguous）、`shared/jp-calendar.ts`（dayInfo / addBusinessDays / holidaysBetween）、`gateway/holiday-refresher.ts`（起動時・既定24時間ごとに取り込み、失敗時は前回データで継続、収録終端が近いと警告）、`mcp/datetime-server.ts`（`date_info` / `add_business_days` / `list_holidays`、`resolve_date` に暦を付記）、`shared/dates.ts`（早見表に注記フック）、`sessions/context.ts`（早見表に六曜・祝日）、`mcp/resolver.ts`（`JINN_HOLIDAYS_FILE`）、`shared/types.ts`（`calendar.holidays`）、`gateway/server.ts`（refresher 起動）。
+- **データ**: `JINN_HOME/data/jp-holidays.json`。設定 `calendar.holidays.{enabled,url,refreshHours}`。
+- **★デグレ源**: server.ts の `startHolidayRefresher(config)` が消えると祝日データが更新されず、収録範囲外で「不明」になる。
+
 ## 上流マージ時のチェックリスト（デグレ防止）
 1. `engines/bob.ts` が残っているか（＋`engines/bob.plugin.ts` が registry から解決されるか）
 2. **★エンジン設定選択が `engines/registry.ts` の `resolveEngineConfig` に集約されたままか**（`manager.ts`/`api.ts`/`context.ts`/`migrate.ts` が自前三項に戻っていないか。bob/外部エンジンが自分のブロックに解決されるか）← 最優先

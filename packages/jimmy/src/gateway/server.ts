@@ -29,6 +29,7 @@ import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from ".
 import { ensureFilesDir } from "./files.js";
 import { initStt } from "../stt/stt.js";
 import { startWatchers, stopWatchers, syncSkillSymlinks } from "./watcher.js";
+import { startHolidayRefresher } from "./holiday-refresher.js";
 import {
   resolvePlugin,
   type ConnectorContext,
@@ -1035,6 +1036,7 @@ export async function startGateway(
   }
 
   // Start file watchers
+  startHolidayRefresher(config);
   startWatchers({
     onConfigReload: () => {
       try {

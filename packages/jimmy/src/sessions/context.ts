@@ -8,7 +8,9 @@ import { buildServiceRegistry } from "../gateway/services.js";
 import { findJobsNeedingAttention } from "../jobs/state.js";
 import { resolveEngineConfig } from "../engines/registry.js";
 import { employeeVisibleInChannel } from "../shared/employee-access.js";
-import { buildDateContext } from "../shared/dates.js";
+import { buildDateContext, zonedNow, safeTimeZone, iso } from "../shared/dates.js";
+import { coverageWarning, holidayFilePath, loadHolidayData } from "../shared/jp-holidays.js";
+import { dayInfo, shortAnnotation } from "../shared/jp-calendar.js";
 
 /**
  * Token budget strategy:
@@ -230,7 +232,15 @@ export function buildContext(opts: {
   sections.push({
     tier: Tier.ESSENTIAL,
     marker: "## 現在日時",
-    content: buildDateContext(new Date(), opts.speakerTz || opts.config?.portal?.timezone),
+    content: (() => {
+      // 暦情報（#668）: 祝日（内閣府CSVの取り込みデータ）と六曜を早見表に付記
+      const tz = opts.speakerTz || opts.config?.portal?.timezone;
+      const now = new Date();
+      const holidays = loadHolidayData(holidayFilePath(JINN_HOME));
+      const z = zonedNow(now, safeTimeZone(tz));
+      const warn = coverageWarning(holidays, iso({ y: z.y, m: z.m, d: z.d }));
+      return buildDateContext(now, tz, (ymd) => shortAnnotation(dayInfo(ymd, holidays)), warn ? [warn] : []);
+    })(),
     summary: "", // always included
   });
 

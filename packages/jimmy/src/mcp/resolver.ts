@@ -200,7 +200,11 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
     servers.datetime = {
       command: "node",
       args: [scriptPath],
-      env: { JINN_TIMEZONE: sessionContext?.timezone || "Asia/Tokyo" },
+      env: {
+        JINN_TIMEZONE: sessionContext?.timezone || "Asia/Tokyo",
+        // 祝日データ（#668, ゲートウェイが内閣府CSVを定期取り込み）
+        JINN_HOLIDAYS_FILE: path.join(JINN_HOME, "data", "jp-holidays.json"),
+      },
     };
   }
 
