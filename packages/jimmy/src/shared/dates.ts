@@ -90,7 +90,11 @@ function mondayOf(v: Ymd): Ymd {
 
 /* ───────────────────────── A. context block ───────────────────────── */
 
-export function buildDateContext(now: Date, tz?: string): string {
+/**
+ * @param annotate 日付（YYYY-MM-DD）→ 注記（例: "大安・祝:スポーツの日"）。暦情報（#668）を付ける場合に渡す。
+ * @param notes    末尾に添える注意書き（例: 祝日データの収録範囲の警告）。
+ */
+export function buildDateContext(now: Date, tz?: string, annotate?: (ymd: string) => string, notes: string[] = []): string {
   const zone = safeTimeZone(tz);
   const n = zonedNow(now, zone);
   const today: Ymd = { y: n.y, m: n.m, d: n.d };
@@ -105,7 +109,8 @@ export function buildDateContext(now: Date, tz?: string): string {
     const mon = addDays(mondayOf(today), offsetWeeks * 7);
     return Array.from({ length: 7 }, (_, i) => {
       const day = addDays(mon, i);
-      return `${WEEKDAYS_JA[weekday(day)]} ${iso(day).slice(5)}`;
+      const hol = annotate?.(iso(day)).match(/祝:([^・]+)/)?.[1];
+      return `${WEEKDAYS_JA[weekday(day)]} ${iso(day).slice(5)}${hol ? `（祝:${hol}）` : ""}`;
     }).join(" / ");
   };
   return [
@@ -113,12 +118,20 @@ export function buildDateContext(now: Date, tz?: string): string {
     `現在: ${fmt(today)} ${String(n.hh).padStart(2, "0")}:${String(n.mi).padStart(2, "0")}（${zone}）`,
     "",
     "日付早見表（相対日付はこの表から引く。自分で計算・推測しない。年も必ずこの表の年を使う）:",
-    ...rel.map(([label, off]) => `- ${label}: ${fmt(addDays(today, off))}`),
+    ...rel.map(([label, off]) => {
+      const d = addDays(today, off);
+      const a = annotate?.(iso(d));
+      return `- ${label}: ${fmt(d)}${a ? ` ${a}` : ""}`;
+    }),
     `- 先週（月〜日）: ${week(-1)}`,
     `- 今週（月〜日）: ${week(0)}`,
     `- 来週（月〜日）: ${week(1)}`,
     "",
     "上表に無い日付表現（「3日後」「来月10日」「次の金曜」等）は `resolve_date` ツールで変換すること。解釈できない場合は推測せず相手に確認する。",
+    ...(annotate
+      ? ["祝日・営業日・六曜は推測せず、上表か `date_info` / `add_business_days` / `list_holidays` ツールで確認すること（祝日は内閣府の公表データ）。"]
+      : []),
+    ...notes.map((n) => `※ ${n}`),
   ].join("\n");
 }
 
