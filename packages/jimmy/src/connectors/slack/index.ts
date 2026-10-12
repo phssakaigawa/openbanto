@@ -12,6 +12,7 @@ import type {
   SlackActionHook,
 } from "../../shared/types.js";
 import { spawn } from "node:child_process";
+import { buildActionHookEnv, extractActionHookContext, type ActionHookContext } from "./action-hooks.js";
 import { buildReplyContext, deriveSessionKey, isOldSlackMessage } from "./threads.js";
 import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
@@ -161,7 +162,8 @@ export class SlackConnector implements Connector {
    * Run a configured Block Kit button hook: spawn its command with the button
    * value as the final argv (no shell — the value cannot inject), then post the
    * command's stdout back into the thread (chunked to Slack's message limit).
-   * Failures post a short diagnostic instead of going silent.
+   * The presser and the message location are passed as BANTO_ACTION_* env vars
+   * (see action-hooks.ts). Failures post a short diagnostic instead of going silent.
    */
   private async runActionHook(
     actionId: string,
@@ -171,6 +173,7 @@ export class SlackConnector implements Connector {
     channel: string,
     threadTs: string,
     messageTs?: string,
+    ctx?: ActionHookContext,
   ): Promise<void> {
     const post = async (text: string) => {
       const MAX = 3500;
@@ -189,6 +192,7 @@ export class SlackConnector implements Connector {
     try {
       const child = spawn(hook.command, [...(hook.args ?? []), value], {
         timeout: hook.timeoutMs ?? 600_000,
+        env: buildActionHookEnv(ctx ?? { actionId, value, channel, messageTs, threadTs }),
       });
       let out = "";
       let err = "";
@@ -774,13 +778,11 @@ export class SlackConnector implements Connector {
     for (const [actionId, hook] of Object.entries(this.actionHooks ?? {})) {
       this.app.action(actionId, async ({ ack, body, client }) => {
         await ack();
-        const b = body as any;
-        const value = b.actions?.[0]?.value ?? "";
-        const channel = b.channel?.id ?? b.container?.channel_id;
-        const messageTs = b.message?.ts ?? b.container?.message_ts;
-        const threadTs = b.message?.thread_ts || messageTs;
-        const user = b.user?.id;
-        logger.info(`[slack] action ${actionId} by ${user} value="${value}"`);
+        const ctx = extractActionHookContext(actionId, body);
+        const { value, messageTs } = ctx;
+        const channel = ctx.channel as string;
+        const threadTs = ctx.threadTs as string;
+        logger.info(`[slack] action ${actionId} by ${ctx.userId} value="${value}"`);
         // At-a-glance progress on the card itself: 👀 while running, swapped to
         // ✅/❌ when runActionHook finishes.
         if (messageTs) {
@@ -795,7 +797,7 @@ export class SlackConnector implements Connector {
         }
         // Fire-and-forget: the command may run for minutes (e.g. CPU whisper);
         // ack() has already been sent so Slack won't retry.
-        void this.runActionHook(actionId, hook, value, client, channel, threadTs, messageTs);
+        void this.runActionHook(actionId, hook, value, client, channel, threadTs, messageTs, ctx);
       });
     }
 
