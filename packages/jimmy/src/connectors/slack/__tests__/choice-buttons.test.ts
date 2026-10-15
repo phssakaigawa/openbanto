@@ -5,6 +5,7 @@ import {
   buildChosenBlocks,
   CHOICE_ACTION_ID_PATTERN,
   CHOICE_BLOCK_ID,
+  runChoiceAction,
 } from "../choice-buttons.js";
 
 describe("parseChoiceMarker", () => {
@@ -77,5 +78,41 @@ describe("buildChosenBlocks", () => {
     expect(b[0].type).toBe("context");
     // No interactive elements remain — double presses have nothing to hit.
     expect(JSON.stringify(blocks)).not.toContain("button");
+  });
+});
+
+describe("runChoiceAction", () => {
+  const action = { server: "redmine", tool: "confirm_dc_request" };
+  const id = { userId: "U1", connector: "slack", channel: "C1", thread: "1700000000.000100" };
+
+  it("calls the tool with no args as the presser in the same thread, via=choice", async () => {
+    const calls: unknown[] = [];
+    const caller = {
+      call: async (...a: unknown[]) => {
+        calls.push(a);
+        return { ok: true, text: "DC作業依頼 #700 を起票しました\n" };
+      },
+    };
+    const out = await runChoiceAction(caller, action, "この内容で起票", id);
+    expect(out).toEqual({ kind: "done", text: "DC作業依頼 #700 を起票しました" });
+    expect(calls).toEqual([["redmine", "confirm_dc_request", {}, { ...id, via: "choice" }]]);
+  });
+
+  it("hands the label plus the failure to the engine when the tool fails", async () => {
+    const caller = { call: async () => ({ ok: false, text: "起票していません。確認トークンが無効か期限切れです。" }) };
+    const out = await runChoiceAction(caller, action, "この内容で起票", id);
+    expect(out.kind).toBe("failed");
+    if (out.kind !== "failed") return;
+    expect(out.injectText.startsWith("この内容で起票\n\n")).toBe(true);
+    expect(out.injectText).toContain("confirm_dc_request");
+    expect(out.injectText).toContain("確認トークンが無効か期限切れ");
+  });
+
+  it("treats a thrown error or an empty success as a failure", async () => {
+    const thrown = await runChoiceAction({ call: async () => { throw new Error("boom"); } }, action, "OK", id);
+    expect(thrown.kind).toBe("failed");
+    if (thrown.kind === "failed") expect(thrown.injectText).toContain("boom");
+    const empty = await runChoiceAction({ call: async () => ({ ok: true, text: "  " }) }, action, "OK", id);
+    expect(empty.kind).toBe("failed");
   });
 });

@@ -212,8 +212,9 @@ function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSess
   if (config.custom) {
     for (const [name, serverConfig] of Object.entries(config.custom)) {
       if (serverConfig.enabled === false) continue;
-      // `forms` is gateway-only (Slack modal allowlist) — never hand it to engines.
-      const { enabled, employees, forms: _forms, ...rest } = serverConfig as typeof serverConfig & { forms?: string[] };
+      // `forms` / `choiceActions` are gateway-only (Slack allowlists) — never hand them to engines.
+      const { enabled, employees, forms: _forms, choiceActions: _choiceActions, ...rest } =
+        serverConfig as typeof serverConfig & { forms?: string[]; choiceActions?: Record<string, string> };
 
       // Employee-scoped custom server: only the named employees receive it.
       // The default (no-employee) persona never sees its tools, so the

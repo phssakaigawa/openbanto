@@ -33,6 +33,7 @@ import {
   buildChoiceBlocks,
   buildChosenBlocks,
   parseChoiceMarker,
+  runChoiceAction,
 } from "./choice-buttons.js";
 import {
   FORM_OPEN_ACTION_ID,
@@ -834,6 +835,30 @@ export class SlackConnector implements Connector {
         .update({ channel, ts: messageTs, text, blocks: blocks as never })
         .catch((err: unknown) => logger.warn(`[slack] choice buttons update failed: ${this.formatSlackError(err)}`));
 
+      // Button bound to a 職人 tool (mcp.custom.<server>.choiceActions): run it
+      // directly as the presser and post the result — the engine is skipped on
+      // success. On failure the label (plus the failure) goes to the engine as
+      // a normal reply so it can explain / recover.
+      let injectText = chosen;
+      const action = this.forms?.choiceAction?.(chosen) ?? null;
+      if (action && this.forms) {
+        logger.info(`[slack] choice "${chosen}" → ${action.server}.${action.tool} (direct)`);
+        const outcome = await runChoiceAction(this.forms, action, chosen, {
+          userId,
+          connector: this.name,
+          channel,
+          thread: threadTs,
+        });
+        if (outcome.kind === "done") {
+          await client.chat
+            .postMessage({ channel, thread_ts: threadTs ?? messageTs, text: outcome.text })
+            .catch((err: unknown) => logger.warn(`[slack] choice action result post failed: ${this.formatSlackError(err)}`));
+          return;
+        }
+        logger.warn(`[slack] choice action ${action.server}.${action.tool} failed; handing the press to the engine`);
+        injectText = outcome.injectText;
+      }
+
       if (!this.handler) return;
       // Inject as the pressing user's reply. Session resolution mirrors a
       // typed reply to the buttons message (thread reply → thread session,
@@ -860,7 +885,7 @@ export class SlackConnector implements Connector {
         thread: threadTs,
         user: userId,
         userId,
-        text: chosen,
+        text: injectText,
         attachments: [],
         raw: body,
         transportMeta: {

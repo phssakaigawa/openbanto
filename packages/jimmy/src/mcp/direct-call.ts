@@ -29,6 +29,30 @@ export function isFormAllowed(globalMcp: McpGlobalConfig | undefined, server: st
   return Array.isArray(custom.forms) && custom.forms.includes(form);
 }
 
+/**
+ * The 職人 tool bound to a confirmation-button label
+ * (`mcp.custom.<server>.choiceActions: { "<label>": "<tool>" }`), or null.
+ * Opt-in per server for the same reason as forms: the label comes from an
+ * LLM-emitted marker, so only labels the operator listed may reach a tool.
+ * First enabled server (config order) wins if several bind the same label.
+ */
+export function findChoiceAction(
+  globalMcp: McpGlobalConfig | undefined,
+  label: string,
+): { server: string; tool: string } | null {
+  const key = label.trim();
+  if (!key) return null;
+  for (const [server, raw] of Object.entries(globalMcp?.custom ?? {})) {
+    const custom = raw as { enabled?: boolean; choiceActions?: unknown } | undefined;
+    if (!custom || custom.enabled === false) continue;
+    const actions = custom.choiceActions;
+    if (!actions || typeof actions !== "object" || Array.isArray(actions)) continue;
+    const tool = (actions as Record<string, unknown>)[key];
+    if (typeof tool === "string" && /^[A-Za-z0-9_.-]+$/.test(tool)) return { server, tool };
+  }
+  return null;
+}
+
 export async function callMcpToolDirect(
   globalMcp: McpGlobalConfig | undefined,
   server: string,
