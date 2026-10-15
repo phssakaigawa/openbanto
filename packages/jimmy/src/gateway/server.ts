@@ -1,5 +1,5 @@
 import http from "node:http";
-import { callMcpToolDirect, isFormAllowed } from "../mcp/direct-call.js";
+import { callMcpToolDirect, findChoiceAction, isFormAllowed } from "../mcp/direct-call.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -464,7 +464,7 @@ export async function startGateway(
           // live config so mcp.custom.<server>.forms edits apply on reload.
           forms: {
             allowed: (server: string, form: string) => isFormAllowed(cfg.mcp, server, form),
-            call: (server: string, tool: string, args: Record<string, unknown>, id: { userId: string; userName?: string; connector: string; channel: string; thread?: string }) =>
+            call: (server: string, tool: string, args: Record<string, unknown>, id: { userId: string; userName?: string; connector: string; channel: string; thread?: string; via?: string }) =>
               callMcpToolDirect(cfg.mcp, server, tool, args, {
                 userId: id.userId,
                 userKey: id.userId,
@@ -472,7 +472,9 @@ export async function startGateway(
                 connector: id.connector,
                 channel: id.channel,
                 thread: id.thread,
+                via: id.via,
               }),
+            choiceAction: (label: string) => findChoiceAction(cfg.mcp, label),
           },
           goalExtraction: c.slack.goalExtraction,
           agentsCanvas: c.slack.agentsCanvas,

@@ -343,6 +343,15 @@ export interface McpServerUrlConfig {
    * config is handed to engines.
    */
   forms?: string[];
+  /**
+   * Confirmation buttons ([[choices: …]]) whose press calls this 職人's tool
+   * directly instead of handing the label to the engine: `{ label: tool }`.
+   * The tool is called with no arguments as the pressing user, in the same
+   * channel/thread as the conversation — the 職人 must resolve what to act on
+   * from that identity (e.g. "this user's latest pending confirmation in this
+   * thread"). Gateway-only; stripped before the config is handed to engines.
+   */
+  choiceActions?: Record<string, string>;
 }
 
 /** MCP server config — either stdio (command) or URL-based */
@@ -481,8 +490,10 @@ export interface SlackFormsBridge {
     server: string,
     tool: string,
     args: Record<string, unknown>,
-    identity: { userId: string; userName?: string; connector: string; channel: string; thread?: string },
+    identity: { userId: string; userName?: string; connector: string; channel: string; thread?: string; via?: string },
   ): Promise<{ ok: boolean; text: string }>;
+  /** 職人 tool bound to a confirmation-button label (mcp.custom.<server>.choiceActions), or null. */
+  choiceAction?(label: string): { server: string; tool: string } | null;
 }
 
 export interface SlackConnectorConfig {
