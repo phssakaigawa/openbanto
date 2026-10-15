@@ -33,8 +33,9 @@ import {
   buildChoiceBlocks,
   buildChosenBlocks,
   parseChoiceMarker,
-  runChoiceAction,
 } from "./choice-buttons.js";
+import { parseConfirmMarker } from "../../shared/confirm-block.js";
+import { CONFIRM_APPROVE_ACTION_ID, buildConfirmBlocks } from "./confirm-buttons.js";
 import {
   FORM_OPEN_ACTION_ID,
   FORM_SUBMIT_CALLBACK_ID,
@@ -103,6 +104,8 @@ export class SlackConnector implements Connector {
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   /** Choice-buttons messages already pressed (double-press guard; bounded). */
   private pressedChoiceMessages = new Set<string>();
+  /** Approve buttons whose confirm call is running (double-press guard). */
+  private confirmInFlight = new Set<string>();
   /** Modal forms bridge (gateway-injected). Null → [[form:]] markers stay plain text. */
   private readonly forms: SlackFormsBridge | null;
   /** view.id → spec of an open form (labels for the submission echo). Bounded. */
@@ -835,30 +838,6 @@ export class SlackConnector implements Connector {
         .update({ channel, ts: messageTs, text, blocks: blocks as never })
         .catch((err: unknown) => logger.warn(`[slack] choice buttons update failed: ${this.formatSlackError(err)}`));
 
-      // Button bound to a 職人 tool (mcp.custom.<server>.choiceActions): run it
-      // directly as the presser and post the result — the engine is skipped on
-      // success. On failure the label (plus the failure) goes to the engine as
-      // a normal reply so it can explain / recover.
-      let injectText = chosen;
-      const action = this.forms?.choiceAction?.(chosen) ?? null;
-      if (action && this.forms) {
-        logger.info(`[slack] choice "${chosen}" → ${action.server}.${action.tool} (direct)`);
-        const outcome = await runChoiceAction(this.forms, action, chosen, {
-          userId,
-          connector: this.name,
-          channel,
-          thread: threadTs,
-        });
-        if (outcome.kind === "done") {
-          await client.chat
-            .postMessage({ channel, thread_ts: threadTs ?? messageTs, text: outcome.text })
-            .catch((err: unknown) => logger.warn(`[slack] choice action result post failed: ${this.formatSlackError(err)}`));
-          return;
-        }
-        logger.warn(`[slack] choice action ${action.server}.${action.tool} failed; handing the press to the engine`);
-        injectText = outcome.injectText;
-      }
-
       if (!this.handler) return;
       // Inject as the pressing user's reply. Session resolution mirrors a
       // typed reply to the buttons message (thread reply → thread session,
@@ -885,7 +864,7 @@ export class SlackConnector implements Connector {
         thread: threadTs,
         user: userId,
         userId,
-        text: injectText,
+        text: chosen,
         attachments: [],
         raw: body,
         transportMeta: {
@@ -899,6 +878,62 @@ export class SlackConnector implements Connector {
         },
       };
       this.handler(msg);
+    });
+
+    // Approve button of a software-rendered confirmation (shared/confirm-block.ts):
+    // call the 職人's confirm tool with the token the button carries, as the
+    // presser. The engine is not involved, so what gets executed is exactly
+    // the preview that was displayed above the button.
+    this.app.action(CONFIRM_APPROVE_ACTION_ID, async ({ ack, body, client }) => {
+      await ack();
+      const b = body as any;
+      const [server, tool, token] = String(b.actions?.[0]?.value ?? "").split("|");
+      const label = String(b.actions?.[0]?.text?.text ?? "確定");
+      const channel: string | undefined = b.channel?.id ?? b.container?.channel_id;
+      const messageTs: string | undefined = b.message?.ts ?? b.container?.message_ts;
+      const threadTs: string | undefined = b.message?.thread_ts;
+      const userId: string | undefined = b.user?.id;
+      if (!server || !tool || !token || !channel || !messageTs || !userId) {
+        logger.warn(`[slack] confirm press with incomplete payload (channel=${channel} ts=${messageTs} user=${userId})`);
+        return;
+      }
+      const ephemeral = (text: string) =>
+        client.chat
+          .postEphemeral({ channel, user: userId, text, ...(threadTs ? { thread_ts: threadTs } : {}) })
+          .catch((err: unknown) => logger.warn(`[slack] confirm ephemeral failed: ${this.formatSlackError(err)}`));
+      if (!this.forms?.confirmAllowed?.(server, tool)) {
+        logger.warn(`[slack] confirm press for non-allowlisted ${server}.${tool} by ${userId}`);
+        await ephemeral("⚠️ この確認ボタンは無効です（設定で許可されていません）。");
+        return;
+      }
+      const pressKey = `${channel}:${messageTs}`;
+      if (this.confirmInFlight.has(pressKey)) return;
+      this.confirmInFlight.add(pressKey);
+      try {
+        logger.info(`[slack] confirm ${server}.${tool} pressed by ${userId} in ${channel} (thread=${threadTs ?? "-"})`);
+        const res = await this.forms.call(server, tool, { confirmToken: token }, {
+          userId,
+          connector: this.name,
+          channel,
+          thread: threadTs,
+          via: "confirm",
+        });
+        if (!res.ok) {
+          // Keep the buttons: e.g. someone other than the requester pressed.
+          logger.warn(`[slack] confirm ${server}.${tool} refused: ${res.text.slice(0, 200)}`);
+          await ephemeral(`⚠️ 確定できませんでした: ${res.text}`);
+          return;
+        }
+        const { blocks, text } = buildChosenBlocks(label, userId);
+        await client.chat
+          .update({ channel, ts: messageTs, text, blocks: blocks as never })
+          .catch((err: unknown) => logger.warn(`[slack] confirm buttons update failed: ${this.formatSlackError(err)}`));
+        await client.chat
+          .postMessage({ channel, thread_ts: threadTs ?? messageTs, text: res.text })
+          .catch((err: unknown) => logger.warn(`[slack] confirm result post failed: ${this.formatSlackError(err)}`));
+      } finally {
+        this.confirmInFlight.delete(pressKey);
+      }
     });
 
     if (this.forms) this.registerFormHandlers(this.forms);
@@ -1109,9 +1144,13 @@ export class SlackConnector implements Connector {
     // button that opens a 職人-defined modal (see forms.ts).
     const form = this.forms ? parseFormMarker(text) : null;
     if (form) text = form.body;
+    // Trailing [[confirm: …]] marker (software-rendered confirmation, see
+    // shared/confirm-block.ts) → the preview, then approve/修正/中止 buttons.
+    const confirm = form ? null : parseConfirmMarker(text);
+    if (confirm) text = confirm.body;
     // Trailing [[choices: …]] marker → post the question text, then an
     // interactive buttons message (see choice-buttons.ts for the contract).
-    const parsed = form ? null : parseChoiceMarker(text);
+    const parsed = form || confirm ? null : parseChoiceMarker(text);
     const chunks = formatResponse(parsed ? parsed.body : text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
@@ -1131,6 +1170,9 @@ export class SlackConnector implements Connector {
     if (form && lastTs) {
       lastTs = (await this.postFormLauncher(target.channel, undefined, { s: form.server, f: form.form })) ?? lastTs;
     }
+    if (confirm && lastTs) {
+      lastTs = (await this.postConfirmButtons(target.channel, undefined, confirm)) ?? lastTs;
+    }
     // A newly-posted root message will be the thread_ts for any follow-up replies,
     // so mark its future thread as bot-engaged. Only relevant when tracking is on.
     if (lastTs && this.conversationTrackingEnabled()) {
@@ -1144,7 +1186,9 @@ export class SlackConnector implements Connector {
     const threadTs = target.thread || target.messageTs;
     const form = this.forms ? parseFormMarker(text) : null;
     if (form) text = form.body;
-    const parsed = form ? null : parseChoiceMarker(text);
+    const confirm = form ? null : parseConfirmMarker(text);
+    if (confirm) text = confirm.body;
+    const parsed = form || confirm ? null : parseChoiceMarker(text);
     const chunks = formatResponse(parsed ? parsed.body : text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
@@ -1161,6 +1205,9 @@ export class SlackConnector implements Connector {
     }
     if (form) {
       lastTs = (await this.postFormLauncher(target.channel, threadTs, { s: form.server, f: form.form })) ?? lastTs;
+    }
+    if (confirm) {
+      lastTs = (await this.postConfirmButtons(target.channel, threadTs, confirm)) ?? lastTs;
     }
     // Record the thread the bot just replied in. Subsequent user replies in
     // this same thread will carry thread_ts === threadTs and bypass triage
@@ -1314,6 +1361,25 @@ ${echo}` : ""}`);
   }
 
   /** Post the interactive buttons message for a parsed [[choices: …]] marker. */
+  private async postConfirmButtons(
+    channel: string,
+    threadTs: string | undefined,
+    c: { server: string; tool: string; token: string; label: string },
+  ): Promise<string | undefined> {
+    try {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+        text: `確認: ${c.label} / 修正する / 中止`,
+        blocks: buildConfirmBlocks(c) as never,
+      });
+      return res.ts;
+    } catch (err) {
+      logger.warn(`[slack] confirm buttons post failed: ${this.formatSlackError(err)}`);
+      return undefined;
+    }
+  }
+
   private async postChoiceButtons(
     channel: string,
     threadTs: string | undefined,

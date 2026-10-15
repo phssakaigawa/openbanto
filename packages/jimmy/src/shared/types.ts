@@ -92,6 +92,11 @@ export interface EngineResult {
    * does not repeat work that already ran with side effects.
    */
   executedToolCalls?: Array<{ name: string; ok: boolean }>;
+  /**
+   * Last confirmation block a tool returned this turn (shared/confirm-block.ts).
+   * When set, the gateway shows it verbatim INSTEAD of the engine's text.
+   */
+  confirmation?: { server: string; tool: string; token: string; display: string; label?: string };
 }
 
 export interface EngineRateLimitInfo {
@@ -344,14 +349,11 @@ export interface McpServerUrlConfig {
    */
   forms?: string[];
   /**
-   * Confirmation buttons ([[choices: …]]) whose press calls this 職人's tool
-   * directly instead of handing the label to the engine: `{ label: tool }`.
-   * The tool is called with no arguments as the pressing user, in the same
-   * channel/thread as the conversation — the 職人 must resolve what to act on
-   * from that identity (e.g. "this user's latest pending confirmation in this
-   * thread"). Gateway-only; stripped before the config is handed to engines.
+   * Confirm tools this 職人 may bind to a software-rendered approve button
+   * (see shared/confirm-block.ts). Opt-in allowlist; gateway-only, stripped
+   * before the config is handed to engines.
    */
-  choiceActions?: Record<string, string>;
+  confirmTools?: string[];
 }
 
 /** MCP server config — either stdio (command) or URL-based */
@@ -492,8 +494,8 @@ export interface SlackFormsBridge {
     args: Record<string, unknown>,
     identity: { userId: string; userName?: string; connector: string; channel: string; thread?: string; via?: string },
   ): Promise<{ ok: boolean; text: string }>;
-  /** 職人 tool bound to a confirmation-button label (mcp.custom.<server>.choiceActions), or null. */
-  choiceAction?(label: string): { server: string; tool: string } | null;
+  /** Whether an approve button may call `server.tool` (mcp.custom.<server>.confirmTools). */
+  confirmAllowed?(server: string, tool: string): boolean;
 }
 
 export interface SlackConnectorConfig {

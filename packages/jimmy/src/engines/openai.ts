@@ -29,6 +29,7 @@
 // back) until the model returns a final answer, which is streamed out. Without
 // tools (no config / no servers) it uses the original streaming chat path
 // unchanged. See ../mcp/tool-bridge.ts and docs/design/tools-mcp-wiring.md.
+import { extractConfirmation } from "../shared/confirm-block.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
@@ -642,6 +643,8 @@ export class OpenAiEngine implements InterruptibleEngine {
     // honestly when nothing ran at all. A call is "ok" only when the bridge
     // neither threw nor returned its `Error:`-prefixed failure string.
     const execLog: Array<{ name: string; ok: boolean; ms: number }> = [];
+    // Last software-rendered confirmation a tool returned (shared/confirm-block.ts).
+    let confirmation: ReturnType<typeof extractConfirmation> = null;
     let roundsUsed = 0;
     // Context budget guard: `lastUsageTokens` is the serving stack's exact
     // count for the previous request+response; `charsSinceUsage` estimates
@@ -814,6 +817,7 @@ export class OpenAiEngine implements InterruptibleEngine {
         // results as an `Error:`-prefixed string instead of throwing.
         const callOk = !callThrew && !toolResult.startsWith("Error:");
         execLog.push({ name, ok: callOk, ms: callMs });
+        if (callOk) confirmation = extractConfirmation(name, toolResult) ?? confirmation;
         // Include a one-line result preview: an MCP call can be transport-"ok"
         // while its payload is really a failure message, and the preview is how
         // that shows up in the log without replaying the turn.
@@ -983,6 +987,7 @@ export class OpenAiEngine implements InterruptibleEngine {
       ...(execLog.length > 0
         ? { executedToolCalls: execLog.map(({ name, ok }) => ({ name, ok })) }
         : {}),
+      ...(confirmation ? { confirmation } : {}),
       durationMs: Date.now() - startedAt,
       ...(typeof contextTokens === "number" ? { contextTokens } : {}),
       ...(typeof cost === "number" ? { cost } : {}),

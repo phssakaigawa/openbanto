@@ -11,7 +11,7 @@ import {
   parseLaunchRef,
   summarizeSubmission,
 } from "../forms.js";
-import { findChoiceAction, isFormAllowed } from "../../../mcp/direct-call.js";
+import { isConfirmAllowed, isFormAllowed } from "../../../mcp/direct-call.js";
 
 const spec = {
   form: "work_request",
@@ -146,28 +146,26 @@ describe("isFormAllowed", () => {
   });
 });
 
-describe("findChoiceAction", () => {
+describe("isConfirmAllowed", () => {
   const mcp = {
     custom: {
-      redmine: { url: "https://x/mcp", choiceActions: { "この内容で起票": "confirm_dc_request", bad: "rm -rf /" } },
+      redmine: { url: "https://x/mcp", confirmTools: ["confirm_dc_request"] },
       netbox: { url: "https://y/mcp" },
-      off: { url: "z", choiceActions: { 実行: "run" }, enabled: false },
+      off: { url: "z", confirmTools: ["run"], enabled: false },
     },
   } as any;
-  it("is opt-in per server and label", () => {
-    expect(findChoiceAction(mcp, "この内容で起票")).toEqual({ server: "redmine", tool: "confirm_dc_request" });
-    expect(findChoiceAction(mcp, " この内容で起票 ")).toEqual({ server: "redmine", tool: "confirm_dc_request" });
-    expect(findChoiceAction(mcp, "修正する")).toBeNull();
-    expect(findChoiceAction(mcp, "実行")).toBeNull();
-    expect(findChoiceAction(mcp, "bad")).toBeNull();
-    expect(findChoiceAction(mcp, "")).toBeNull();
-    expect(findChoiceAction(undefined, "この内容で起票")).toBeNull();
+  it("is opt-in per server and tool", () => {
+    expect(isConfirmAllowed(mcp, "redmine", "confirm_dc_request")).toBe(true);
+    expect(isConfirmAllowed(mcp, "redmine", "delete_issue")).toBe(false);
+    expect(isConfirmAllowed(mcp, "netbox", "confirm_dc_request")).toBe(false);
+    expect(isConfirmAllowed(mcp, "off", "run")).toBe(false);
+    expect(isConfirmAllowed(undefined, "redmine", "confirm_dc_request")).toBe(false);
   });
   it("is never handed to engines", async () => {
     const { resolveMcpServers } = await import("../../../mcp/resolver.js");
-    const m = { browser: { enabled: false }, gateway: { enabled: false }, knowledge: { enabled: false }, custom: { redmine: { type: "http", url: "https://x/mcp", choiceActions: { a: "b" }, forms: ["f"] } } } as any;
+    const m = { browser: { enabled: false }, gateway: { enabled: false }, knowledge: { enabled: false }, custom: { redmine: { type: "http", url: "https://x/mcp", confirmTools: ["b"], forms: ["f"] } } } as any;
     const cfg = resolveMcpServers(m, undefined, { userId: "U1" }).mcpServers.redmine as any;
-    expect(cfg.choiceActions).toBeUndefined();
+    expect(cfg.confirmTools).toBeUndefined();
     expect(cfg.forms).toBeUndefined();
   });
 });
