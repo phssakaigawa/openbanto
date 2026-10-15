@@ -37,6 +37,7 @@ import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, i
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { guardDateClaims } from "../shared/dates.js";
+import { renderConfirmationReply, stripConfirmMarkers } from "../shared/confirm-block.js";
 import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
 import { checkBudget } from "../gateway/budgets.js";
@@ -1379,6 +1380,23 @@ export class SessionManager {
         };
         if (result.result) result.result = fix(result.result);
         if (result.turns) result.turns = result.turns.map((t) => (typeof t === "string" ? fix(t) : t));
+      }
+
+      // Software-rendered confirmation (shared/confirm-block.ts): a 職人 preview
+      // is shown verbatim INSTEAD of the engine's text, so the user can only
+      // approve what is actually displayed — the engine can neither rewrite it
+      // nor bind a button to content it didn't show. Confirm markers the engine
+      // wrote itself are always stripped.
+      {
+        const strip = (t: string) => stripConfirmMarkers(t);
+        if (result.result) result.result = strip(result.result);
+        if (result.turns) result.turns = result.turns.map((t) => (typeof t === "string" ? strip(t) : t));
+        if (result.confirmation && !result.error) {
+          const text = renderConfirmationReply(result.confirmation, session.source === "slack");
+          logger.info(`[confirm] session ${session.id}: showing ${result.confirmation.server}.${result.confirmation.tool} preview verbatim (engine text replaced)`);
+          result.result = text;
+          if (result.turns && result.turns.length > 0) result.turns = [...result.turns.slice(0, -1), text];
+        }
       }
 
       const responseText = result.result?.trim()

@@ -1,5 +1,5 @@
 import http from "node:http";
-import { callMcpToolDirect, findChoiceAction, isFormAllowed } from "../mcp/direct-call.js";
+import { callMcpToolDirect, isConfirmAllowed, isFormAllowed } from "../mcp/direct-call.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -474,7 +474,7 @@ export async function startGateway(
                 thread: id.thread,
                 via: id.via,
               }),
-            choiceAction: (label: string) => findChoiceAction(cfg.mcp, label),
+            confirmAllowed: (server: string, tool: string) => isConfirmAllowed(cfg.mcp, server, tool),
           },
           goalExtraction: c.slack.goalExtraction,
           agentsCanvas: c.slack.agentsCanvas,
