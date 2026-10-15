@@ -96,3 +96,22 @@ export function parseConfirmMarker(
     label: (m[4] ?? "").trim() || CONFIRM_APPROVE_LABEL,
   };
 }
+
+/**
+ * Apply the contract to an engine result in place: strip engine-written
+ * confirm markers, and when a tool produced a confirmation (and the turn did
+ * not error) replace the reply with the verbatim preview. Returns true when
+ * the reply was replaced. Used by every path that delivers engine output.
+ */
+export function applyConfirmation(
+  result: { result?: string; turns?: string[]; error?: string; confirmation?: ConfirmationBlock & { label?: string } },
+  interactive: boolean,
+): boolean {
+  if (result.result) result.result = stripConfirmMarkers(result.result);
+  if (result.turns) result.turns = result.turns.map((t) => (typeof t === "string" ? stripConfirmMarkers(t) : t));
+  if (!result.confirmation || result.error) return false;
+  const text = renderConfirmationReply(result.confirmation, interactive);
+  result.result = text;
+  if (result.turns && result.turns.length > 0) result.turns = [...result.turns.slice(0, -1), text];
+  return true;
+}

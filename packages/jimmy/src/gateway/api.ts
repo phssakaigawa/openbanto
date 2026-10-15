@@ -2,6 +2,7 @@ import type { IncomingMessage as HttpRequest, ServerResponse } from "node:http";
 import http from "node:http";
 import crypto from "node:crypto";
 import { guardDateClaims } from "../shared/dates.js";
+import { applyConfirmation } from "../shared/confirm-block.js";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
@@ -3258,6 +3259,12 @@ async function runWebSession(
         logger.warn(`[date-guard] web session ${currentSession.id}: corrected ${g.fixes.map((f) => `${f.label} ${f.wrong}→${f.correct}`).join(", ")}`);
         result.result = g.text;
       }
+    }
+
+    // Software-rendered confirmation (shared/confirm-block.ts): same rule as
+    // the connector path — a 職人 preview replaces the engine's text verbatim.
+    if (applyConfirmation(result, currentSession.source === "slack")) {
+      logger.info(`[confirm] web session ${currentSession.id}: showing ${result.confirmation!.server}.${result.confirmation!.tool} preview verbatim (engine text replaced)`);
     }
 
     // Persist the assistant response
