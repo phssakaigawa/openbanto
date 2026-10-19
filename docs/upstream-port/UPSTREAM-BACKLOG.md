@@ -5,7 +5,7 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 衝突リスクは各コミットの変更ファイルを [BANTO-PORT-PLAN.md](./BANTO-PORT-PLAN.md) の独自変更ファイル群と機械照合した結果。
 週次の新着は「OpenRyoko上流ウォッチ」ルーチンが Slack DM で通知する — 本書は初期在庫、以後の増分はルーチン側。
 
-最終棚卸し: 2026-10-12(上流 2026.10.9 = 9669607 時点)
+最終棚卸し: 2026-10-19(上流 2026.10.16 = 9544436 時点)
 
 ## 優先度P1 — 小さく効く(すぐ取り込み推奨)
 
@@ -87,6 +87,20 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 |---|---|---|---|---|
 | PR#101 (b248458, 10-08) | Linux virtiofsでディスク容量を計算する際にI/Oブロックサイズ(1MiB)を割当単位(4KiB)として誤用し、実容量を256倍過大表示するバグを修正(低ディスク空き容量を隠す恐れ)。macOS/Windowsは変更なし。2026.10.8リリース | 中〜高 — 実運用でのディスク空き検知の正確性に直結(Linux環境で特に実害) | 低(`shared/storage-health.ts`、独自変更ファイル無関係) | **P1** |
 | PR#102 (bad25da+0175fc1+9f9d9e3, 10-09) | ①テンプレートの`CLAUDE.md`/`AGENTS.md`二重管理(手動同期で実機ドリフトが発生)を解消し`AGENTS.md`を8KB運用地図に一本化、`CLAUDE.md`は`AGENTS.md`/`IDENTITY.md`/`SOUL.md`参照のみの入口に縮小 ②gateway起動のClaudeプロセス(単発/PTY常駐/セッション複製/`ryoko migrate`。SSH先は対象外)に`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`を設定し、`MEMORY.md`の公開範囲外で話者問わず読み込まれ肥大化するClaude専用自動メモリ索引を無効化(既存メモがある環境は警告ログのみで自動では無効化しない。`engines.claude.autoMemory`で明示指定可)+2026.10.9リリース | 高 — 複数エンジン混在運用での記憶ガバナンスと指示書保守性に直結する実問題の修正(TBCare SHIN-AI実機で発見) | **HIGH**(`gateway/api.ts`, `gateway/server.ts`, `sessions/context.ts`, `shared/types.ts`) | P2(専用スプリントでチェックリスト全走推奨。独自AGENTS.md/CLAUDE.md構成・MEMORY.md運用との統合方針を要確認) |
+
+進行中(open PR、参考・台帳には追記しない): 新規のopen PRはなし。**PR#92**(継続)は引き続きopenで変化なし。
+
+### 2026-10-19(上流 2026.10.16 = 9544436 時点)
+
+前回棚卸し(9669607, 10-09)以降 main に入った5件(直近1週間、2026-10-13〜10-16にマージ)。PRタイトル/本文は GitHub API で取得。実質的な変更は2件(#103/#106)、#104/#105/#107はリリース公開作業・スキル指紋表の更新のみ。
+
+| 上流コミット(PR) | 内容 | 価値 | 衝突リスク | 推奨 |
+|---|---|---|---|---|
+| PR#103 (65da07f, 10-13, 440ファイル) | **上流jinn v0.30〜v0.33.4の改良15件を統合**(cron実行結果の正確な記録・再起動時のturn再開・日次バックアップ/復元・設定保存の安全化・利用上限中エンジンの先回り回避・Slack再ログイン・同梱スキル起動時同期 等)+レビューで見つかった不具合修正(チャットメッセージがCLIコマンドとして解釈される脆弱性、Slack bot tokenがSlack外ホストへ送られる漏洩、gateway内蔵MCPの認証欠如、`/api/files`のパストラバーサル等) | **高** — 実運用のcron信頼性・セキュリティ修正多数。ただし破壊的変更あり(緑cronが赤になる、添付200MB上限、`/model`等operatorのみ等) | **HIGH**(`gateway/api.ts`,`gateway/server.ts`,`mcp/resolver.ts`,`shared/types.ts`,`connectors/slack/index.ts`,`connectors/slack/format.ts`,`sessions/manager.ts`,`sessions/context.ts` 全て接触。312コミット/440ファイルの大規模統合) | P2(専用スプリント必須。セキュリティ項目は個別に前倒し検討の価値あり) |
+| PR#106 (1eda880, 10-16) | 本人とbotだけのSlackスレッドで、メンションなしの続けた依頼に答えないバグを修正(`isSoloThread`導入、30分超/作業完了後/定期投稿下でも直接ルートで受理) | 中〜高 — mentionゲート運用下で見落としていた「呼びかけ見逃し」の実害修正 | **HIGH**(`connectors/slack/index.ts`、新規`addressing.ts`/`triage-context.ts`) | P2(#103と合わせてまとめてレビュー推奨) |
+| PR#104 (d65794f, 10-13) | v2026.10.13が同梱したスキルの指紋表更新(#103のリリース後作業) | — | 低(`bundled-skill-history.json`のみ) | 不要 |
+| PR#105 (6804d23, 10-14) | 2026.10.13リリースノートの言い過ぎ訂正+バナー追加(文書・画像のみ) | — | 低 | 不要 |
+| PR#107 (9544436, 10-16) | v2026.10.16タグの同梱スキル指紋表更新 | — | 低(`bundled-skill-history.json`のみ) | 不要 |
 
 進行中(open PR、参考・台帳には追記しない): 新規のopen PRはなし。**PR#92**(継続)は引き続きopenで変化なし。
 
