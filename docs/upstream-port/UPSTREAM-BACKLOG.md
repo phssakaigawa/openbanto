@@ -5,7 +5,7 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 衝突リスクは各コミットの変更ファイルを [BANTO-PORT-PLAN.md](./BANTO-PORT-PLAN.md) の独自変更ファイル群と機械照合した結果。
 週次の新着は「OpenRyoko上流ウォッチ」ルーチンが Slack DM で通知する — 本書は初期在庫、以後の増分はルーチン側。
 
-最終棚卸し: 2026-10-19(上流 2026.10.16 = 9544436 時点)
+最終棚卸し: 2026-10-26(上流 2026.10.22 = 5f24060 時点)
 
 ## 優先度P1 — 小さく効く(すぐ取り込み推奨)
 
@@ -103,6 +103,21 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 | PR#107 (9544436, 10-16) | v2026.10.16タグの同梱スキル指紋表更新 | — | 低(`bundled-skill-history.json`のみ) | 不要 |
 
 進行中(open PR、参考・台帳には追記しない): 新規のopen PRはなし。**PR#92**(継続)は引き続きopenで変化なし。
+
+### 2026-10-26(上流 2026.10.22 = 5f24060 時点)
+
+前回棚卸し(9544436, 10-16)以降 main に入った6コミット(直近1週間、2026-10-20〜10-22にマージ)。PRタイトル/本文は GitHub API で取得。実質的な変更は3件(#108/#109が1組/#112)、#110/#113はスキル指紋表の更新のみ、#114はNode.js/依存更新。
+
+| 上流コミット(PR) | 内容 | 価値 | 衝突リスク | 推奨 |
+|---|---|---|---|---|
+| PR#108 (739c7fd+eed83e8, 10-20) | **cron circuit breaker**: ジョブが`maxConsecutiveFailures`(既定5)回連続失敗すると一時停止(以降のtickはスキップしログ、アラート1回)+1時間毎のトライアル実行で成功したら自動復帰。`POST /api/cron/:id/resume`と`ryoko automation resume`を追加。状態は`cron/state/<id>.json`に分離保存+2026.10.17リリース準備 | 高 — cron多用運用での「気づかず止まり続ける」を防ぐ実用機能 | 中(`gateway/api.ts`に新規ルート追加・`shared/types.ts`に`CronJob.maxConsecutiveFailures?`追記・`shared/paths.ts`に`CRON_STATE`定数追加。いずれも既存ロジック非接触の追加のみ) | **P1** |
+| PR#109 (2767917, 10-20) | automation resumeテストのジョブIDを中立化(#108のテスト追従のみ) | — (#108従属、単独では不要) | 低(テストファイルのみ) | P3(#108採用時に同時取込) |
+| PR#112 (8cb01d8, 10-22) | **応答ウォッチドッグの誤検知修正**: headless/interactive Claudeエンジンがthinking中・長いツール入力・実行中ツール(デプロイ等)を「無活動」と誤判定し`engineNoResponseTimeoutMs`(5分)でフォールバックへ切り替えていた問題を修正。CLI出力(`thinking_delta`/`input_json_delta`/tool_use開始〜tool_result/バックグラウンドタスク)を活動として計上する新モジュール`engines/claude-activity.ts`を追加+2026.10.22リリース | 高 — 長時間ツール実行中に意図せずフォールバックエンジンへ切り替わる実運用バグの修正 | 中(`shared/types.ts`の`Engine.getLastActivityAt`はコメント更新のみで構造変更なし。`engines/claude.ts`/`claude-interactive.ts`はOpenBanto独自変更ファイル無関係) | **P1** |
+| PR#110 (e409d98, 10-20) | 2026.10.17が同梱したスキルの指紋表更新 | — | 低(`bundled-skill-history.json`のみ) | 不要 |
+| PR#113 (536d954, 10-22) | 2026.10.22が同梱したスキルの指紋表更新 | — | 低(`bundled-skill-history.json`のみ) | 不要 |
+| PR#114 (5f24060, 10-22) | Node.jsランタイム(22.23.4/24.22.1、`engines.node`をパッチ版固定に変更)・TypeScript/zod/vitest/playwright/turbo/sharp/ws/chokidar等の依存更新+CI更新(脆弱性パッチ) | 高 — セキュリティ更新 | 低(独自変更ファイル無関係。ただし`pnpm-lock.yaml`全体更新のため、OpenBanto独自追加分(`@openbanto/engine-sdk`/`guardrail-sdk`/`@modelcontextprotocol/sdk`/baileys peer dep)との整合は取り込み時に`pnpm install`で要確認) | **P1** |
+
+進行中(open PR、参考・台帳には追記しない): **PR#111**「Claudeで分類するときはthinkingを外す(トリアージの時間切れ)」— `connectors.slack.triage.engine: claude`運用時、分類だけのone-shot呼び出しでもデフォルトでthinkingが走り数千トークン消費→タイムアウトしfail-open(SILENT)になる問題。`invokeOneShot`が`classificationOnly`時のみ子プロセス環境に`MAX_THINKING_TOKENS=0`を追加して修正(`shared/oneShotCli.ts`、12行差分)。**OpenBanto独自のbobエンジン分岐がある`shared/oneShotCli.ts`に触れるため、マージされたら衝突リスクHIGH想定**(取り込み時は要確認)。**PR#92**(reactionPassthrough)は引き続きopenで変化なし。
 
 ## 取り込み時の手順(共通)
 
