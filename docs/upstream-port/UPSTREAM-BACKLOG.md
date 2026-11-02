@@ -5,7 +5,7 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 衝突リスクは各コミットの変更ファイルを [BANTO-PORT-PLAN.md](./BANTO-PORT-PLAN.md) の独自変更ファイル群と機械照合した結果。
 週次の新着は「OpenRyoko上流ウォッチ」ルーチンが Slack DM で通知する — 本書は初期在庫、以後の増分はルーチン側。
 
-最終棚卸し: 2026-10-26(上流 2026.10.22 = 5f24060 時点)
+最終棚卸し: 2026-11-02(上流 2026.10.28 = 79f49f8 時点)
 
 ## 優先度P1 — 小さく効く(すぐ取り込み推奨)
 
@@ -118,6 +118,17 @@ OpenBanto は **2026-08-09 に OpenRyoko 2026.8.5 相当のスナップショッ
 | PR#114 (5f24060, 10-22) | Node.jsランタイム(22.23.4/24.22.1、`engines.node`をパッチ版固定に変更)・TypeScript/zod/vitest/playwright/turbo/sharp/ws/chokidar等の依存更新+CI更新(脆弱性パッチ) | 高 — セキュリティ更新 | 低(独自変更ファイル無関係。ただし`pnpm-lock.yaml`全体更新のため、OpenBanto独自追加分(`@openbanto/engine-sdk`/`guardrail-sdk`/`@modelcontextprotocol/sdk`/baileys peer dep)との整合は取り込み時に`pnpm install`で要確認) | **P1** |
 
 進行中(open PR、参考・台帳には追記しない): **PR#111**「Claudeで分類するときはthinkingを外す(トリアージの時間切れ)」— `connectors.slack.triage.engine: claude`運用時、分類だけのone-shot呼び出しでもデフォルトでthinkingが走り数千トークン消費→タイムアウトしfail-open(SILENT)になる問題。`invokeOneShot`が`classificationOnly`時のみ子プロセス環境に`MAX_THINKING_TOKENS=0`を追加して修正(`shared/oneShotCli.ts`、12行差分)。**OpenBanto独自のbobエンジン分岐がある`shared/oneShotCli.ts`に触れるため、マージされたら衝突リスクHIGH想定**(取り込み時は要確認)。**PR#92**(reactionPassthrough)は引き続きopenで変化なし。
+
+### 2026-11-02(上流 2026.10.28 = 79f49f8 時点)
+
+前回棚卸し(5f24060, 10-22)以降 main に入った2件(直近7日、2026-10-28にマージ)。PRタイトル/本文は GitHub API で取得。実質的な変更は1件(#115)、#116はスキル指紋表の更新のみ。
+
+| 上流コミット(PR) | 内容 | 価値 | 衝突リスク | 推奨 |
+|---|---|---|---|---|
+| PR#115 (08a3912, 10-28) | Codexが負荷制限時に返す「Selected model is at capacity」をthrottle/outageシグネチャに追加し、overloadedと同様にフォールバックエンジンへ切り替わるよう修正(従来は未マッチで即失敗、cron実行も失敗していた) | 高 — Codex利用時の実運用障害(フォールバック未発動によるターン/cron失敗)の修正 | 低(`shared/engine-failure.ts`, `shared/rateLimit.ts`。独自変更ファイル無関係) | **P1** |
+| PR#116 (6dd5f65, 10-28) | 2026.10.28が同梱したスキルの指紋表更新(#115のリリース後作業) | — | 低(`bundled-skill-history.json`のみ) | 不要 |
+
+進行中(open PR、参考・台帳には追記しない): 新規のopen PRはなし。**PR#92**(reactionPassthrough)・**PR#111**(thinking除外)ともに引き続きopenで変化なし。
 
 ## 取り込み時の手順(共通)
 
